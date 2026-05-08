@@ -51,6 +51,37 @@
         <h2>OCR Text</h2>
         <pre id="ocrText">Scan a business card to see extracted text.</pre>
       </section>
+
+      <section class="card">
+        <div class="section-header">
+          <h2>Saved Cards</h2>
+          <button id="refreshCardsBtn" class="btn secondary small" type="button">Refresh</button>
+        </div>
+        <p class="hint">
+          Use this to verify what will be returned by <code>GET /cards</code> (and what you can later transfer to another database).
+        </p>
+        <div class="table-wrap">
+          <table class="cards-table" aria-label="Saved business cards">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Name</th>
+                <th>Number</th>
+                <th>Company</th>
+                <th>Designation</th>
+                <th>Website</th>
+                <th>Confirmed</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="cardsTbody">
+              <tr>
+                <td colspan="8" class="muted">No cards loaded yet. Click Refresh.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
     </main>
 
     <div id="toast" class="toast"></div>

@@ -9,6 +9,8 @@ const ocrText = document.getElementById("ocrText");
 const form = document.getElementById("detailsForm");
 const confirmBtn = document.getElementById("confirmBtn");
 const toast = document.getElementById("toast");
+const refreshCardsBtn = document.getElementById("refreshCardsBtn");
+const cardsTbody = document.getElementById("cardsTbody");
 
 let confirmedOnce = false;
 let selectedFile = null;
@@ -38,6 +40,64 @@ function getFormData() {
     data[field] = value ? value : null;
   }
   return data;
+}
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
+function formatDate(isoString) {
+  if (!isoString) return "";
+  const date = new Date(isoString);
+  if (Number.isNaN(date.getTime())) return isoString;
+  return date.toLocaleString();
+}
+
+async function refreshCards() {
+  if (!cardsTbody) return;
+  refreshCardsBtn && (refreshCardsBtn.disabled = true);
+
+  try {
+    const res = await fetch("/cards");
+    const payload = await res.json();
+    if (!res.ok) throw new Error(payload.error || "Failed to load saved cards.");
+
+    const cards = payload.cards || [];
+    if (!cards.length) {
+      cardsTbody.innerHTML = '<tr><td colspan="8" class="muted">No saved cards yet.</td></tr>';
+      return;
+    }
+
+    cardsTbody.innerHTML = cards
+      .map((card) => {
+        const json = JSON.stringify(card);
+        const compact = JSON.stringify(card, null, 0);
+        return `
+          <tr>
+            <td>${escapeHtml(card.id)}</td>
+            <td>${escapeHtml(card.name)}</td>
+            <td>${escapeHtml(card.number)}</td>
+            <td>${escapeHtml(card.company_name)}</td>
+            <td>${escapeHtml(card.designation)}</td>
+            <td>${escapeHtml(card.website)}</td>
+            <td>${escapeHtml(formatDate(card.confirmed_at))}</td>
+            <td class="actions-cell">
+              <button class="btn tiny" type="button" data-copy='${escapeHtml(json)}'>Copy JSON</button>
+            </td>
+          </tr>
+        `;
+      })
+      .join("");
+  } catch (error) {
+    cardsTbody.innerHTML = `<tr><td colspan="8" class="error-cell">Error: ${escapeHtml(error.message)}</td></tr>`;
+  } finally {
+    refreshCardsBtn && (refreshCardsBtn.disabled = false);
+  }
 }
 
 async function scanCard(file) {
@@ -108,9 +168,27 @@ form.addEventListener("submit", async (e) => {
     scanStatus.textContent = "Entry confirmed and saved to knowledge base.";
     errorMessage.textContent = "";
     showToast("Confirmed and saved to knowledge base");
+    refreshCards();
   } catch (error) {
     confirmBtn.disabled = false;
     errorMessage.textContent = error.message;
     showToast(error.message);
   }
 });
+
+refreshCardsBtn?.addEventListener("click", refreshCards);
+
+document.addEventListener("click", async (e) => {
+  const btn = e.target?.closest?.("button[data-copy]");
+  if (!btn) return;
+  const text = btn.getAttribute("data-copy") || "";
+  try {
+    await navigator.clipboard.writeText(text);
+    showToast("Copied JSON");
+  } catch {
+    showToast("Copy failed");
+  }
+});
+
+// Load saved cards on first page load.
+refreshCards();

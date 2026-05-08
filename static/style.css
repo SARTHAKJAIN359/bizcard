@@ -74,6 +74,17 @@ h1 {
   background: #7c3aed;
 }
 
+.btn.small {
+  padding: 10px 12px;
+  border-radius: 10px;
+}
+
+.btn.tiny {
+  padding: 8px 10px;
+  border-radius: 10px;
+  font-size: 0.85rem;
+}
+
 .btn.confirm {
   margin-top: 12px;
   width: 100%;
@@ -142,6 +153,63 @@ pre {
   margin: 0;
   color: #334155;
   font-size: 0.86rem;
+}
+
+code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 0.9em;
+}
+
+.hint {
+  margin: 8px 0 12px;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.table-wrap {
+  overflow-x: auto;
+}
+
+.cards-table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 720px;
+}
+
+.cards-table th,
+.cards-table td {
+  border-bottom: 1px solid var(--border);
+  padding: 10px 8px;
+  text-align: left;
+  vertical-align: top;
+  font-size: 0.9rem;
+}
+
+.cards-table thead th {
+  color: #111827;
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.actions-cell {
+  white-space: nowrap;
+}
+
+.error-cell {
+  color: #b91c1c;
+  font-size: 0.9rem;
 }
 
 .toast {
