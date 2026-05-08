@@ -13,6 +13,7 @@ import requests
 from dotenv import load_dotenv
 from flask import Flask, jsonify, render_template, request
 from flask_sqlalchemy import SQLAlchemy
+from werkzeug.exceptions import HTTPException
 
 load_dotenv()
 
@@ -28,6 +29,43 @@ app.config["SQLALCHEMY_DATABASE_URI"] = DATABASE_URL
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
 db = SQLAlchemy(app)
+
+
+@app.errorhandler(HTTPException)
+def handle_http_exception(exc: HTTPException):
+    """
+    Ensure API endpoints return JSON instead of default HTML error pages.
+
+    This prevents front-end JSON parsing errors when Werkzeug generates an HTML response
+    (e.g., InternalServerError) outside route-level try/except blocks.
+    """
+    api_paths = {"/scan", "/confirm", "/cards", "/health"}
+    wants_json = (
+        request.path in api_paths
+        or request.path.startswith("/api/")
+        or "application/json" in (request.headers.get("Accept") or "")
+    )
+    if not wants_json:
+        return exc
+    return jsonify({"error": exc.description}), exc.code
+
+
+@app.errorhandler(Exception)
+def handle_unhandled_exception(exc: Exception):
+    api_paths = {"/scan", "/confirm", "/cards", "/health"}
+    wants_json = (
+        request.path in api_paths
+        or request.path.startswith("/api/")
+        or "application/json" in (request.headers.get("Accept") or "")
+    )
+    if not wants_json:
+        return ("Internal Server Error", 500)
+
+    # Avoid leaking stack traces; include only a short detail string.
+    detail = str(exc)
+    if len(detail) > 300:
+        detail = detail[:300] + "..."
+    return jsonify({"error": "Internal server error.", "detail": detail}), 500
 
 BASE_DIR = Path(__file__).resolve().parent
 INSTANCE_DIR = BASE_DIR / "instance"
