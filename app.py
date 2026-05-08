@@ -36,6 +36,7 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 TESSERACT_CMD_ENV = os.getenv("TESSERACT_CMD", "").strip()
+TESSERACT_LANG = os.getenv("TESSERACT_LANG", "eng").strip() or "eng"
 
 
 class OCRDependencyError(RuntimeError):
@@ -140,25 +141,68 @@ class BusinessCard(db.Model):
 
 
 def preprocess_image(image_bytes: bytes) -> np.ndarray:
+    """
+    Preprocess business card images for OCR.
+
+    Returns a single image optimized for text recognition.
+    """
     np_array = np.frombuffer(image_bytes, np.uint8)
     image = cv2.imdecode(np_array, cv2.IMREAD_COLOR)
     if image is None:
         raise ValueError("Invalid image data.")
 
-    max_width = 1000
+    max_width = 1400
     height, width = image.shape[:2]
     if width > max_width:
         scale = max_width / float(width)
         image = cv2.resize(image, (int(width * scale), int(height * scale)), interpolation=cv2.INTER_AREA)
 
-    blurred = cv2.GaussianBlur(image, (5, 5), 0)
-    gray = cv2.cvtColor(blurred, cv2.COLOR_BGR2GRAY)
-    return gray
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+    # Boost local contrast for small fonts / low lighting.
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    gray = clahe.apply(gray)
+
+    # Denoise while preserving edges.
+    denoised = cv2.bilateralFilter(gray, d=7, sigmaColor=55, sigmaSpace=55)
+
+    # Adaptive threshold to handle uneven lighting and glossy cards.
+    thresh = cv2.adaptiveThreshold(
+        denoised,
+        255,
+        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+        cv2.THRESH_BINARY,
+        31,
+        8,
+    )
+
+    # Reduce pepper noise / small artifacts.
+    kernel = np.ones((2, 2), np.uint8)
+    cleaned = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel, iterations=1)
+
+    return cleaned
 
 
 def extract_text_from_image(image: np.ndarray) -> str:
     try:
-        text = pytesseract.image_to_string(image, config="--oem 3 --psm 6")
+        config = (
+            f"--oem 3 --psm 6 -l {TESSERACT_LANG} "
+            "-c preserve_interword_spaces=1 "
+            "-c tessedit_char_blacklist=|"
+        )
+        # Try both the processed image and a softer grayscale variant.
+        candidates: list[np.ndarray] = [image]
+        try:
+            candidates.append(cv2.GaussianBlur(image, (3, 3), 0))
+        except Exception:
+            pass
+
+        best = ""
+        for candidate in candidates:
+            extracted = pytesseract.image_to_string(candidate, config=config).strip()
+            if len(extracted) > len(best):
+                best = extracted
+        text = best
     except getattr(pytesseract.pytesseract, "TesseractNotFoundError", OSError) as exc:
         resolved = RESOLVED_TESSERACT_CMD
         env_value = TESSERACT_CMD_ENV
@@ -221,8 +265,10 @@ def get_structured_data_with_groq(raw_text: str) -> Dict[str, Any]:
         "Rules:\n"
         "1) Use null for missing values.\n"
         "2) If multiple phone numbers exist, combine into one string separated by comma.\n"
-        "3) Do not add extra keys.\n"
-        "4) Return JSON only, no markdown.\n\n"
+        "3) Normalize website to a plain domain/URL without trailing punctuation.\n"
+        "4) Normalize phone numbers to readable format; keep country code if present.\n"
+        "5) Do not add extra keys.\n"
+        "6) Return JSON only, no markdown.\n\n"
         f"Business card OCR text:\n{raw_text}"
     )
 

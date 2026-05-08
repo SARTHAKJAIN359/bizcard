@@ -10,7 +10,7 @@ const form = document.getElementById("detailsForm");
 const confirmBtn = document.getElementById("confirmBtn");
 const toast = document.getElementById("toast");
 const copyLastJsonBtn = document.getElementById("copyLastJsonBtn");
-const lastCardTbody = document.getElementById("lastCardTbody");
+const lastCardFields = document.getElementById("lastCardFields");
 const lastCardJson = document.getElementById("lastCardJson");
 
 let confirmedOnce = false;
@@ -67,27 +67,37 @@ function formatDate(isoString) {
 }
 
 function renderLastConfirmedCard(card) {
-  if (!lastCardTbody || !lastCardJson) return;
+  if (!lastCardFields || !lastCardJson) return;
   lastConfirmedCard = card || null;
 
   if (!lastConfirmedCard) {
-    lastCardTbody.innerHTML = '<tr><td colspan="7" class="muted">No confirmed card yet.</td></tr>';
+    lastCardFields.innerHTML = '<div class="kv muted">No confirmed card yet.</div>';
     lastCardJson.textContent = "{}";
     copyLastJsonBtn && (copyLastJsonBtn.disabled = true);
     return;
   }
 
-  lastCardTbody.innerHTML = `
-    <tr>
-      <td>${escapeHtml(displayValue(lastConfirmedCard.id))}</td>
-      <td>${escapeHtml(displayValue(lastConfirmedCard.name))}</td>
-      <td>${escapeHtml(displayValue(lastConfirmedCard.number))}</td>
-      <td>${escapeHtml(displayValue(lastConfirmedCard.company_name))}</td>
-      <td>${escapeHtml(displayValue(lastConfirmedCard.designation))}</td>
-      <td>${escapeHtml(displayValue(lastConfirmedCard.website))}</td>
-      <td>${escapeHtml(displayValue(formatDate(lastConfirmedCard.confirmed_at)))}</td>
-    </tr>
-  `;
+  const fields = [
+    ["ID", lastConfirmedCard.id],
+    ["Name", lastConfirmedCard.name],
+    ["Phone", lastConfirmedCard.number],
+    ["Company", lastConfirmedCard.company_name],
+    ["Title", lastConfirmedCard.designation],
+    ["Website", lastConfirmedCard.website],
+    ["Address", lastConfirmedCard.address],
+    ["Confirmed", formatDate(lastConfirmedCard.confirmed_at)],
+  ];
+
+  lastCardFields.innerHTML = fields
+    .map(([label, value]) => {
+      return `
+        <div class="kv">
+          <div class="kv-label">${escapeHtml(label)}</div>
+          <div class="kv-value">${escapeHtml(displayValue(value))}</div>
+        </div>
+      `;
+    })
+    .join("");
 
   lastCardJson.textContent = JSON.stringify(lastConfirmedCard, null, 2);
   copyLastJsonBtn && (copyLastJsonBtn.disabled = false);

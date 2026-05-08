@@ -8,17 +8,19 @@
   </head>
   <body>
     <main class="container">
-      <h1>Business Card Scanner</h1>
-      <p class="subtitle">Upload or take a photo to extract details.</p>
+      <header class="header">
+        <h1>BizScanner</h1>
+        <p class="subtitle">Scan a business card and save the contact details.</p>
+      </header>
 
       <section class="card actions">
         <label class="btn">
-          Upload Image
+          Choose Photo
           <input id="uploadInput" type="file" accept="image/*" />
         </label>
 
         <label class="btn secondary">
-          Take Picture
+          Use Camera
           <input id="cameraInput" type="file" accept="image/*" capture="environment" />
         </label>
         <button id="scanBtn" class="btn scan" type="button" disabled>Scan Card</button>
@@ -57,28 +59,9 @@
           <h2>Just Scanned</h2>
           <button id="copyLastJsonBtn" class="btn secondary small" type="button" disabled>Copy JSON</button>
         </div>
-        <p class="hint">
-          This shows only the latest card you confirmed in this session (not older entries).
-        </p>
-        <div class="table-wrap">
-          <table class="cards-table" aria-label="Last confirmed business card">
-            <thead>
-              <tr>
-                <th>ID</th>
-                <th>Name</th>
-                <th>Number</th>
-                <th>Company</th>
-                <th>Designation</th>
-                <th>Website</th>
-                <th>Confirmed</th>
-              </tr>
-            </thead>
-            <tbody id="lastCardTbody">
-              <tr>
-                <td colspan="7" class="muted">No confirmed card yet.</td>
-              </tr>
-            </tbody>
-          </table>
+        <p class="hint">Only the latest confirmed card is shown here.</p>
+        <div id="lastCardFields" class="kv-grid" aria-label="Last confirmed business card">
+          <div class="kv muted">No confirmed card yet.</div>
         </div>
         <details class="json-details">
           <summary>Raw JSON</summary>
