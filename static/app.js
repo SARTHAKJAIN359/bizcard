@@ -9,11 +9,13 @@ const ocrText = document.getElementById("ocrText");
 const form = document.getElementById("detailsForm");
 const confirmBtn = document.getElementById("confirmBtn");
 const toast = document.getElementById("toast");
-const refreshCardsBtn = document.getElementById("refreshCardsBtn");
-const cardsTbody = document.getElementById("cardsTbody");
+const copyLastJsonBtn = document.getElementById("copyLastJsonBtn");
+const lastCardTbody = document.getElementById("lastCardTbody");
+const lastCardJson = document.getElementById("lastCardJson");
 
 let confirmedOnce = false;
 let selectedFile = null;
+let lastConfirmedCard = null;
 
 function showToast(message) {
   toast.textContent = message;
@@ -58,46 +60,31 @@ function formatDate(isoString) {
   return date.toLocaleString();
 }
 
-async function refreshCards() {
-  if (!cardsTbody) return;
-  refreshCardsBtn && (refreshCardsBtn.disabled = true);
+function renderLastConfirmedCard(card) {
+  if (!lastCardTbody || !lastCardJson) return;
+  lastConfirmedCard = card || null;
 
-  try {
-    const res = await fetch("/cards");
-    const payload = await res.json();
-    if (!res.ok) throw new Error(payload.error || "Failed to load saved cards.");
-
-    const cards = payload.cards || [];
-    if (!cards.length) {
-      cardsTbody.innerHTML = '<tr><td colspan="8" class="muted">No saved cards yet.</td></tr>';
-      return;
-    }
-
-    cardsTbody.innerHTML = cards
-      .map((card) => {
-        const json = JSON.stringify(card);
-        const compact = JSON.stringify(card, null, 0);
-        return `
-          <tr>
-            <td>${escapeHtml(card.id)}</td>
-            <td>${escapeHtml(card.name)}</td>
-            <td>${escapeHtml(card.number)}</td>
-            <td>${escapeHtml(card.company_name)}</td>
-            <td>${escapeHtml(card.designation)}</td>
-            <td>${escapeHtml(card.website)}</td>
-            <td>${escapeHtml(formatDate(card.confirmed_at))}</td>
-            <td class="actions-cell">
-              <button class="btn tiny" type="button" data-copy='${escapeHtml(json)}'>Copy JSON</button>
-            </td>
-          </tr>
-        `;
-      })
-      .join("");
-  } catch (error) {
-    cardsTbody.innerHTML = `<tr><td colspan="8" class="error-cell">Error: ${escapeHtml(error.message)}</td></tr>`;
-  } finally {
-    refreshCardsBtn && (refreshCardsBtn.disabled = false);
+  if (!lastConfirmedCard) {
+    lastCardTbody.innerHTML = '<tr><td colspan="7" class="muted">No confirmed card yet.</td></tr>';
+    lastCardJson.textContent = "{}";
+    copyLastJsonBtn && (copyLastJsonBtn.disabled = true);
+    return;
   }
+
+  lastCardTbody.innerHTML = `
+    <tr>
+      <td>${escapeHtml(lastConfirmedCard.id)}</td>
+      <td>${escapeHtml(lastConfirmedCard.name)}</td>
+      <td>${escapeHtml(lastConfirmedCard.number)}</td>
+      <td>${escapeHtml(lastConfirmedCard.company_name)}</td>
+      <td>${escapeHtml(lastConfirmedCard.designation)}</td>
+      <td>${escapeHtml(lastConfirmedCard.website)}</td>
+      <td>${escapeHtml(formatDate(lastConfirmedCard.confirmed_at))}</td>
+    </tr>
+  `;
+
+  lastCardJson.textContent = JSON.stringify(lastConfirmedCard, null, 2);
+  copyLastJsonBtn && (copyLastJsonBtn.disabled = false);
 }
 
 async function scanCard(file) {
@@ -168,7 +155,7 @@ form.addEventListener("submit", async (e) => {
     scanStatus.textContent = "Entry confirmed and saved to knowledge base.";
     errorMessage.textContent = "";
     showToast("Confirmed and saved to knowledge base");
-    refreshCards();
+    renderLastConfirmedCard(payload.data);
   } catch (error) {
     confirmBtn.disabled = false;
     errorMessage.textContent = error.message;
@@ -176,19 +163,14 @@ form.addEventListener("submit", async (e) => {
   }
 });
 
-refreshCardsBtn?.addEventListener("click", refreshCards);
-
-document.addEventListener("click", async (e) => {
-  const btn = e.target?.closest?.("button[data-copy]");
-  if (!btn) return;
-  const text = btn.getAttribute("data-copy") || "";
+copyLastJsonBtn?.addEventListener("click", async () => {
+  if (!lastConfirmedCard) return;
   try {
-    await navigator.clipboard.writeText(text);
+    await navigator.clipboard.writeText(JSON.stringify(lastConfirmedCard, null, 2));
     showToast("Copied JSON");
   } catch {
     showToast("Copy failed");
   }
 });
 
-// Load saved cards on first page load.
-refreshCards();
+renderLastConfirmedCard(null);

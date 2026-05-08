@@ -166,6 +166,24 @@ code {
   font-size: 0.9rem;
 }
 
+.json-details {
+  margin-top: 10px;
+}
+
+.json-details summary {
+  cursor: pointer;
+  color: #0f766e;
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+
+.json-pre {
+  background: #f8fafc;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px;
+}
+
 .section-header {
   display: flex;
   align-items: center;

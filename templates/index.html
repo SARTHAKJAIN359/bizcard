@@ -54,14 +54,14 @@
 
       <section class="card">
         <div class="section-header">
-          <h2>Saved Cards</h2>
-          <button id="refreshCardsBtn" class="btn secondary small" type="button">Refresh</button>
+          <h2>Just Scanned</h2>
+          <button id="copyLastJsonBtn" class="btn secondary small" type="button" disabled>Copy JSON</button>
         </div>
         <p class="hint">
-          Use this to verify what will be returned by <code>GET /cards</code> (and what you can later transfer to another database).
+          This shows only the latest card you confirmed in this session (not older entries).
         </p>
         <div class="table-wrap">
-          <table class="cards-table" aria-label="Saved business cards">
+          <table class="cards-table" aria-label="Last confirmed business card">
             <thead>
               <tr>
                 <th>ID</th>
@@ -71,16 +71,19 @@
                 <th>Designation</th>
                 <th>Website</th>
                 <th>Confirmed</th>
-                <th>Actions</th>
               </tr>
             </thead>
-            <tbody id="cardsTbody">
+            <tbody id="lastCardTbody">
               <tr>
-                <td colspan="8" class="muted">No cards loaded yet. Click Refresh.</td>
+                <td colspan="7" class="muted">No confirmed card yet.</td>
               </tr>
             </tbody>
           </table>
         </div>
+        <details class="json-details">
+          <summary>Raw JSON</summary>
+          <pre id="lastCardJson" class="json-pre">{}</pre>
+        </details>
       </section>
     </main>
 
