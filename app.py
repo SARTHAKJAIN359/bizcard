@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict
@@ -32,14 +33,62 @@ BASE_DIR = Path(__file__).resolve().parent
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
-TESSERACT_CMD = os.getenv("TESSERACT_CMD", "").strip()
+TESSERACT_CMD_ENV = os.getenv("TESSERACT_CMD", "").strip()
 
-if TESSERACT_CMD:
-    tesseract_path = Path(TESSERACT_CMD)
-    # If user points to install folder, use tesseract.exe inside it.
-    if tesseract_path.is_dir():
-        tesseract_path = tesseract_path / "tesseract.exe"
-    pytesseract.pytesseract.tesseract_cmd = str(tesseract_path)
+
+class OCRDependencyError(RuntimeError):
+    pass
+
+
+def _is_windows() -> bool:
+    return os.name == "nt"
+
+
+def resolve_tesseract_cmd() -> str | None:
+    """
+    Resolve the best tesseract executable path.
+
+    Order:
+    1) TESSERACT_CMD env var (exe path or install folder)
+    2) PATH via shutil.which("tesseract")
+    3) Common Windows install paths
+    """
+    candidates: list[str] = []
+
+    if TESSERACT_CMD_ENV:
+        env_path = Path(TESSERACT_CMD_ENV)
+        if env_path.is_dir():
+            exe_name = "tesseract.exe" if _is_windows() else "tesseract"
+            candidates.append(str(env_path / exe_name))
+        else:
+            candidates.append(str(env_path))
+
+    which = shutil.which("tesseract")
+    if which:
+        candidates.append(which)
+
+    if _is_windows():
+        candidates.extend(
+            [
+                r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+                r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+            ]
+        )
+
+    for candidate in candidates:
+        try:
+            if Path(candidate).exists():
+                return candidate
+        except OSError:
+            # Defensive: some paths can raise on Windows if malformed.
+            continue
+
+    return None
+
+
+RESOLVED_TESSERACT_CMD = resolve_tesseract_cmd()
+if RESOLVED_TESSERACT_CMD:
+    pytesseract.pytesseract.tesseract_cmd = RESOLVED_TESSERACT_CMD
 
 TARGET_FIELDS = [
     "name",
@@ -98,11 +147,42 @@ def preprocess_image(image_bytes: bytes) -> np.ndarray:
 def extract_text_from_image(image: np.ndarray) -> str:
     try:
         text = pytesseract.image_to_string(image, config="--oem 3 --psm 6")
+    except getattr(pytesseract.pytesseract, "TesseractNotFoundError", OSError) as exc:
+        resolved = RESOLVED_TESSERACT_CMD
+        env_value = TESSERACT_CMD_ENV
+
+        msg_lines = [
+            "Tesseract is not installed or it's not in your PATH. See README file for more information.",
+            f"TESSERACT_CMD env: {env_value or '(not set)'}",
+            f"Resolved tesseract_cmd: {resolved or '(not found)'}",
+        ]
+
+        if _is_windows():
+            msg_lines.extend(
+                [
+                    "Fix (Windows):",
+                    "1) Install Tesseract OCR (UB Mannheim build is commonly used).",
+                    r"2) Set TESSERACT_CMD to the full exe path, e.g. C:\Program Files\Tesseract-OCR\tesseract.exe",
+                    r"   (or set TESSERACT_CMD to the install folder C:\Program Files\Tesseract-OCR)",
+                    "3) Alternatively, add the folder containing tesseract.exe to your PATH.",
+                ]
+            )
+        else:
+            msg_lines.extend(
+                [
+                    "Fix (Linux/macOS): install tesseract and ensure it's on PATH, or set TESSERACT_CMD to the executable path.",
+                ]
+            )
+
+        raise OCRDependencyError("\n".join(msg_lines)) from exc
     except OSError as exc:
+        # Covers permission/exec issues like WinError 5.
         if "WinError 5" in str(exc):
-            raise RuntimeError(
-                "Tesseract path is not executable. Set TESSERACT_CMD to the full exe path, "
-                "for example: C:\\Program Files\\Tesseract-OCR\\tesseract.exe"
+            raise OCRDependencyError(
+                "Tesseract path is not executable.\n"
+                f"TESSERACT_CMD env: {TESSERACT_CMD_ENV or '(not set)'}\n"
+                f"Resolved tesseract_cmd: {RESOLVED_TESSERACT_CMD or '(not found)'}\n"
+                r"Set TESSERACT_CMD to the full exe path, e.g. C:\Program Files\Tesseract-OCR\tesseract.exe"
             ) from exc
         raise
     return text.strip()
@@ -192,6 +272,8 @@ def scan_card():
         processed = preprocess_image(image_file.read())
         raw_text = extract_text_from_image(processed)
         structured = get_structured_data_with_groq(raw_text)
+    except OCRDependencyError as exc:
+        return jsonify({"error": str(exc)}), 400
     except Exception as exc:
         return jsonify({"error": str(exc)}), 500
 
@@ -222,7 +304,14 @@ def get_all_cards():
 
 @app.get("/health")
 def health():
-    return jsonify({"status": "ok"})
+    return jsonify(
+        {
+            "status": "ok",
+            "tesseract_available": bool(RESOLVED_TESSERACT_CMD),
+            "tesseract_cmd": RESOLVED_TESSERACT_CMD,
+            "tesseract_env": TESSERACT_CMD_ENV,
+        }
+    )
 
 
 @app.before_request

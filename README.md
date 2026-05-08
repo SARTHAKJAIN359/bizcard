@@ -8,7 +8,7 @@ A Flask-based business card scanner that uses OCR and a Groq model to extract st
 - OCR text extraction with Tesseract
 - Structured data extraction via Groq API
 - Editable confirmation form before saving
-- Knowledge base storage in `knowledge_base.json`
+- Knowledge base storage in a database (SQLite locally, PostgreSQL on Render)
 
 ## Setup
 
@@ -64,7 +64,7 @@ Open `http://127.0.0.1:5000` in your browser.
 2. Create a new Web Service on Render and connect your GitHub repository.
 3. Add environment variables:
    - `GROQ_API_KEY` — your Groq API key
-   - `TESSERACT_CMD` — optional (Tesseract is not pre-installed on Render)
+   - `TESSERACT_CMD` — optional (on Render this is set to `/usr/bin/tesseract` via `render.yaml`)
 
 4. **Optional: Use Render PostgreSQL**
    - Create a PostgreSQL database on Render
@@ -81,5 +81,7 @@ gunicorn app:app --bind 0.0.0.0:$PORT
 
 ## Notes
 
-- Ensure Tesseract OCR is installed on Windows if using local OCR.
-- The knowledge base persists confirmed entries in `knowledge_base.json`.
+- Ensure Tesseract OCR is installed on Windows for local OCR.
+  - Preferred: set `TESSERACT_CMD` to the full exe path, e.g. `C:\Program Files\Tesseract-OCR\tesseract.exe`
+  - Alternatively: add the folder containing `tesseract.exe` to your PATH (the app will auto-detect it)
+- If Tesseract is missing/misconfigured, `POST /scan` returns `400` with actionable setup steps.
