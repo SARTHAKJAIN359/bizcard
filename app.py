@@ -1,0 +1,181 @@
+import json
+import os
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict
+
+import cv2
+import numpy as np
+import pytesseract
+import requests
+from dotenv import load_dotenv
+from flask import Flask, jsonify, render_template, request
+
+load_dotenv()
+
+app = Flask(__name__)
+
+BASE_DIR = Path(__file__).resolve().parent
+KNOWLEDGE_BASE_FILE = BASE_DIR / "knowledge_base.json"
+
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
+GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
+TESSERACT_CMD = os.getenv("TESSERACT_CMD", "").strip()
+
+if TESSERACT_CMD:
+    tesseract_path = Path(TESSERACT_CMD)
+    # If user points to install folder, use tesseract.exe inside it.
+    if tesseract_path.is_dir():
+        tesseract_path = tesseract_path / "tesseract.exe"
+    pytesseract.pytesseract.tesseract_cmd = str(tesseract_path)
+
+TARGET_FIELDS = [
+    "name",
+    "number",
+    "address",
+    "website",
+    "company_name",
+    "designation",
+]
+
+
+def preprocess_image(image_bytes: bytes) -> np.ndarray:
+    np_array = np.frombuffer(image_bytes, np.uint8)
+    image = cv2.imdecode(np_array, cv2.IMREAD_COLOR)
+    if image is None:
+        raise ValueError("Invalid image data.")
+
+    max_width = 1000
+    height, width = image.shape[:2]
+    if width > max_width:
+        scale = max_width / float(width)
+        image = cv2.resize(image, (int(width * scale), int(height * scale)), interpolation=cv2.INTER_AREA)
+
+    blurred = cv2.GaussianBlur(image, (5, 5), 0)
+    gray = cv2.cvtColor(blurred, cv2.COLOR_BGR2GRAY)
+    return gray
+
+
+def extract_text_from_image(image: np.ndarray) -> str:
+    try:
+        text = pytesseract.image_to_string(image, config="--oem 3 --psm 6")
+    except OSError as exc:
+        if "WinError 5" in str(exc):
+            raise RuntimeError(
+                "Tesseract path is not executable. Set TESSERACT_CMD to the full exe path, "
+                "for example: C:\\Program Files\\Tesseract-OCR\\tesseract.exe"
+            ) from exc
+        raise
+    return text.strip()
+
+
+def normalize_response(data: Dict[str, Any]) -> Dict[str, Any]:
+    normalized = {}
+    for field in TARGET_FIELDS:
+        value = data.get(field)
+        if value in ("", "N/A", "n/a", "null", "None"):
+            value = None
+        normalized[field] = value
+    return normalized
+
+
+def get_structured_data_with_groq(raw_text: str) -> Dict[str, Any]:
+    if not GROQ_API_KEY:
+        raise RuntimeError("Missing GROQ_API_KEY in .env file.")
+
+    prompt = (
+        "You are an information extraction assistant for business cards.\n"
+        "Extract data and return ONLY valid JSON with keys:\n"
+        "name, number, address, website, company_name, designation.\n"
+        "Rules:\n"
+        "1) Use null for missing values.\n"
+        "2) If multiple phone numbers exist, combine into one string separated by comma.\n"
+        "3) Do not add extra keys.\n"
+        "4) Return JSON only, no markdown.\n\n"
+        f"Business card OCR text:\n{raw_text}"
+    )
+
+    payload = {
+        "model": GROQ_MODEL,
+        "temperature": 0.1,
+        "messages": [
+            {"role": "system", "content": "You extract business card details to strict JSON."},
+            {"role": "user", "content": prompt},
+        ],
+    }
+
+    headers = {
+        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Content-Type": "application/json",
+    }
+
+    response = requests.post(GROQ_URL, headers=headers, json=payload, timeout=45)
+    response.raise_for_status()
+    model_text = response.json()["choices"][0]["message"]["content"].strip()
+
+    if model_text.startswith("```"):
+        model_text = model_text.replace("```json", "").replace("```", "").strip()
+
+    parsed = json.loads(model_text)
+    return normalize_response(parsed)
+
+
+def append_to_knowledge_base(entry: Dict[str, Any]) -> None:
+    if KNOWLEDGE_BASE_FILE.exists():
+        with KNOWLEDGE_BASE_FILE.open("r", encoding="utf-8") as f:
+            try:
+                records = json.load(f)
+            except json.JSONDecodeError:
+                records = []
+    else:
+        records = []
+
+    records.append(
+        {
+            "confirmed_at": datetime.utcnow().isoformat() + "Z",
+            "data": normalize_response(entry),
+        }
+    )
+
+    with KNOWLEDGE_BASE_FILE.open("w", encoding="utf-8") as f:
+        json.dump(records, f, indent=2)
+
+
+@app.get("/")
+def index():
+    return render_template("index.html")
+
+
+@app.post("/scan")
+def scan_card():
+    image_file = request.files.get("image")
+    if not image_file:
+        return jsonify({"error": "No image uploaded."}), 400
+
+    try:
+        processed = preprocess_image(image_file.read())
+        raw_text = extract_text_from_image(processed)
+        structured = get_structured_data_with_groq(raw_text)
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+    return jsonify({"raw_text": raw_text, "data": structured})
+
+
+@app.post("/confirm")
+def confirm_data():
+    payload = request.get_json(silent=True) or {}
+    data = payload.get("data", {})
+    confirmed = normalize_response(data)
+    append_to_knowledge_base(confirmed)
+    return jsonify({"message": "Saved to knowledge base.", "data": confirmed})
+
+
+@app.get("/health")
+def health():
+    return jsonify({"status": "ok"})
+
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000, debug=True)

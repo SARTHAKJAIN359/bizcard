@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Business Card Scanner</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+  </head>
+  <body>
+    <main class="container">
+      <h1>Business Card Scanner</h1>
+      <p class="subtitle">Upload or take a photo to extract details.</p>
+
+      <section class="card actions">
+        <label class="btn">
+          Upload Image
+          <input id="uploadInput" type="file" accept="image/*" />
+        </label>
+
+        <label class="btn secondary">
+          Take Picture
+          <input id="cameraInput" type="file" accept="image/*" capture="environment" />
+        </label>
+        <button id="scanBtn" class="btn scan" type="button" disabled>Scan Card</button>
+      </section>
+
+      <p id="scanStatus" class="status" aria-live="polite">Choose an image to begin.</p>
+      <p id="errorMessage" class="error" aria-live="assertive"></p>
+
+      <section class="card preview-section">
+        <h2>Uploaded Business Card</h2>
+        <img id="preview" alt="Business card preview" />
+      </section>
+
+      <section class="card">
+        <h2>Extracted Information</h2>
+        <form id="detailsForm">
+          <div class="grid">
+            <label>Name<input name="name" /></label>
+            <label>Number<input name="number" /></label>
+            <label>Address<textarea name="address" rows="3"></textarea></label>
+            <label>Website<input name="website" /></label>
+            <label>Company Name<input name="company_name" /></label>
+            <label>Designation<input name="designation" /></label>
+          </div>
+          <button id="confirmBtn" class="btn confirm" type="submit" disabled>Confirm Entries</button>
+        </form>
+      </section>
+
+      <section class="card">
+        <h2>OCR Text</h2>
+        <pre id="ocrText">Scan a business card to see extracted text.</pre>
+      </section>
+    </main>
+
+    <div id="toast" class="toast"></div>
+    <script src="{{ url_for('static', filename='app.js') }}"></script>
+  </body>
+</html>
