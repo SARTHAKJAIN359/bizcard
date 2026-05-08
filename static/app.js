@@ -15,6 +15,7 @@ const lastCardJson = document.getElementById("lastCardJson");
 const clearBtn = document.getElementById("clearBtn");
 const detailsBadge = document.getElementById("detailsBadge");
 const steps = Array.from(document.querySelectorAll(".stepper .step"));
+const warningsBox = document.getElementById("warnings");
 
 let confirmedOnce = false;
 let selectedFile = null;
@@ -56,6 +57,38 @@ function setFormData(data = {}) {
       input.value = data[field] ?? "";
     }
   }
+}
+
+function clearReviewMarkers() {
+  const fields = ["name", "number", "address", "website", "company_name", "designation"];
+  for (const field of fields) {
+    const input = form.elements[field];
+    const wrapper = input?.closest?.(".field");
+    wrapper?.classList?.remove("needs-review");
+  }
+  if (warningsBox) {
+    warningsBox.hidden = true;
+    warningsBox.textContent = "";
+  }
+}
+
+function markNeedsReview(fieldNames = []) {
+  for (const name of fieldNames) {
+    const input = form.elements[name];
+    const wrapper = input?.closest?.(".field");
+    wrapper?.classList?.add("needs-review");
+  }
+}
+
+function showWarnings(warnings = []) {
+  if (!warningsBox) return;
+  if (!warnings?.length) {
+    warningsBox.hidden = true;
+    warningsBox.textContent = "";
+    return;
+  }
+  warningsBox.hidden = false;
+  warningsBox.textContent = warnings.join(" ");
 }
 
 function getFormData() {
@@ -154,6 +187,7 @@ async function scanCard(file) {
     const payload = await res.json();
     if (!res.ok) throw new Error(payload.error || "Failed to scan card.");
 
+    clearReviewMarkers();
     setFormData(payload.data || {});
     ocrText.textContent = payload.raw_text || "No text detected.";
     confirmBtn.disabled = false;
@@ -161,6 +195,10 @@ async function scanCard(file) {
     showToast("Business card scanned successfully");
     setStep(3);
     setBadge("review");
+
+    const meta = payload.meta || {};
+    showWarnings(meta.warnings || []);
+    markNeedsReview(meta.low_confidence_fields || []);
   } catch (error) {
     ocrText.textContent = `Error: ${error.message}`;
     scanStatus.textContent = "Scan failed.";
@@ -207,6 +245,7 @@ function clearSelection() {
   errorMessage.textContent = "";
   ocrText.textContent = "Scan a business card to see extracted text.";
   setFormData({});
+  clearReviewMarkers();
   clearBtn && (clearBtn.disabled = true);
   setStep(1);
   setBadge("waiting");
@@ -249,6 +288,13 @@ form.addEventListener("submit", async (e) => {
   }
   confirmBtn.classList.remove("loading");
   isSaving = false;
+});
+
+form.addEventListener("input", (e) => {
+  const el = e.target;
+  if (!el?.name) return;
+  const wrapper = el.closest?.(".field");
+  wrapper?.classList?.remove("needs-review");
 });
 
 copyLastJsonBtn?.addEventListener("click", async () => {

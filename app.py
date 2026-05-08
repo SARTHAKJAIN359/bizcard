@@ -4,6 +4,7 @@ import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict
+import re
 
 import cv2
 import numpy as np
@@ -111,6 +112,83 @@ TARGET_FIELDS = [
     "company_name",
     "designation",
 ]
+
+
+def _looks_like_url(value: str) -> bool:
+    return bool(re.search(r"(https?://|www\.|[A-Za-z0-9-]+\.[A-Za-z]{2,})", value))
+
+
+def _clean_website(value: str | None) -> str | None:
+    if not value:
+        return None
+    v = value.strip().strip(".,;:")
+    if not v:
+        return None
+    # Fix common OCR confusions
+    v = v.replace(" ", "").replace("|", "").replace("'", "")
+    v = v.replace("htrp://", "http://").replace("htlp://", "http://").replace("httр://", "http://")
+    if not _looks_like_url(v):
+        return None
+    return v
+
+
+def _clean_phone(value: str | None) -> str | None:
+    if not value:
+        return None
+    v = value.strip()
+    if not v:
+        return None
+    # Keep + and digits, plus comma separators if already present.
+    compact = re.sub(r"[^0-9+,]", "", v)
+    # Require at least 8 digits total across all numbers.
+    digits = re.sub(r"[^0-9]", "", compact)
+    if len(digits) < 8:
+        return None
+    return compact
+
+
+def validate_and_flag(data: Dict[str, Any], raw_text: str) -> tuple[Dict[str, Any], dict[str, Any]]:
+    """
+    Post-process structured data to reduce obvious mistakes and return review hints.
+
+    - Nulls out clearly invalid phone/website values
+    - Flags low-confidence fields for UI highlighting
+    """
+    normalized = normalize_response(data)
+    warnings: list[str] = []
+    low_confidence: list[str] = []
+
+    website = _clean_website(normalized.get("website"))
+    if normalized.get("website") and not website:
+        warnings.append("Website looked unreliable; please review.")
+        low_confidence.append("website")
+    normalized["website"] = website
+
+    number = _clean_phone(normalized.get("number"))
+    if normalized.get("number") and not number:
+        warnings.append("Phone number looked unreliable; please review.")
+        low_confidence.append("number")
+    normalized["number"] = number
+
+    # If the model returned a name/company that doesn't appear in OCR at all, flag it.
+    ocr_lower = (raw_text or "").lower()
+    for key in ("name", "company_name", "designation"):
+        val = normalized.get(key)
+        if not val:
+            continue
+        token = str(val).strip().lower()
+        if token and token not in ocr_lower:
+            low_confidence.append(key)
+
+    # Deduplicate while preserving order.
+    seen = set()
+    low_confidence = [x for x in low_confidence if not (x in seen or seen.add(x))]
+
+    meta = {
+        "warnings": warnings,
+        "low_confidence_fields": low_confidence,
+    }
+    return normalized, meta
 
 
 # Database model
@@ -407,7 +485,8 @@ def get_structured_data_with_groq(raw_text: str) -> Dict[str, Any]:
 
     prompt = (
         "You are an information extraction assistant for business cards.\n"
-        "Extract data and return ONLY valid JSON with keys:\n"
+        "Extract data and return ONLY valid JSON.\n"
+        "Return an object with exactly these keys:\n"
         "name, number, address, website, company_name, designation.\n"
         "Rules:\n"
         "1) Use null for missing values.\n"
@@ -506,13 +585,14 @@ def scan_card():
         image_bytes = image_file.read()
         variants = _generate_ocr_variants(image_bytes)
         raw_text = extract_text_from_image(variants)
-        structured = get_structured_data_with_groq(raw_text)
+        structured_raw = get_structured_data_with_groq(raw_text)
+        structured, meta = validate_and_flag(structured_raw, raw_text=raw_text)
     except OCRDependencyError as exc:
         return jsonify({"error": str(exc)}), 400
     except Exception as exc:
         return jsonify({"error": str(exc)}), 500
 
-    return jsonify({"raw_text": raw_text, "data": structured})
+    return jsonify({"raw_text": raw_text, "data": structured, "meta": meta})
 
 
 @app.post("/confirm")

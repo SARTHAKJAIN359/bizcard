@@ -442,6 +442,29 @@ code {
   font-size: 0.88rem;
 }
 
+.warnings {
+  margin: 10px 0 6px;
+  padding: 10px 12px;
+  border-radius: 16px;
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  background: rgba(245, 158, 11, 0.08);
+  color: rgba(255, 237, 213, 0.95);
+  font-size: 0.9rem;
+  line-height: 1.35;
+}
+
+.field.needs-review input,
+.field.needs-review textarea {
+  border-color: rgba(245, 158, 11, 0.6);
+  box-shadow: 0 0 0 4px rgba(245, 158, 11, 0.14);
+}
+
+.field.needs-review .field-label::after {
+  content: " • check";
+  color: rgba(245, 158, 11, 0.95);
+  font-weight: 900;
+}
+
 .toast {
   position: fixed;
   left: 50%;
