@@ -61,23 +61,13 @@ Open `http://127.0.0.1:5000` in your browser.
 ## Render Deployment
 
 1. Push this repository to GitHub.
-2. Create a new Web Service on Render and connect your GitHub repository.
-3. Add environment variables:
-   - `GROQ_API_KEY` — your Groq API key
-   - `TESSERACT_CMD` — optional (on Render this is set to `/usr/bin/tesseract` via `render.yaml`)
+2. In Render, create a **Blueprint** from this repo (uses `render.yaml`).
+3. Add environment variables in Render:
+   - `GROQ_API_KEY` — required Groq API key
+   - `GROQ_MODEL` — optional (defaults to `llama-3.1-8b-instant`)
+4. Create a Render PostgreSQL database named `bizscanner` (the Blueprint wires `DATABASE_URL` automatically).
 
-4. **Optional: Use Render PostgreSQL**
-   - Create a PostgreSQL database on Render
-   - Copy the database URL from Render
-   - Add `DATABASE_URL` environment variable to your Web Service
-   - Your business card data will persist across restarts
-
-Render will install dependencies from `requirements.txt` and run:
-```bash
-gunicorn app:app --bind 0.0.0.0:$PORT
-```
-
-> The included `Procfile`, `runtime.txt`, and `.render.yaml` provide Render with the correct start command and Python runtime.
+> This project deploys on Render as a Docker service. The Docker image installs Tesseract and sets `TESSERACT_CMD=/usr/bin/tesseract` automatically.
 
 ## Notes
 

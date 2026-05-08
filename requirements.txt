@@ -2,7 +2,7 @@ Flask
 Flask-SQLAlchemy
 psycopg2-binary
 python-dotenv
-opencv-python
+opencv-python-headless
 numpy
 pytesseract
 requests
