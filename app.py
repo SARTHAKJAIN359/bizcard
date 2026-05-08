@@ -77,9 +77,9 @@ GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 TESSERACT_CMD_ENV = os.getenv("TESSERACT_CMD", "").strip()
 TESSERACT_LANG = os.getenv("TESSERACT_LANG", "eng").strip() or "eng"
-TESSERACT_TIMEOUT_SEC = int(os.getenv("TESSERACT_TIMEOUT_SEC", "8") or "8")
-OCR_MAX_VARIANTS = int(os.getenv("OCR_MAX_VARIANTS", "8") or "8")
-OCR_TIME_BUDGET_SEC = int(os.getenv("OCR_TIME_BUDGET_SEC", "22") or "22")
+TESSERACT_TIMEOUT_SEC = int(os.getenv("TESSERACT_TIMEOUT_SEC", "12") or "12")
+OCR_MAX_VARIANTS = int(os.getenv("OCR_MAX_VARIANTS", "5") or "5")
+OCR_TIME_BUDGET_SEC = int(os.getenv("OCR_TIME_BUDGET_SEC", "18") or "18")
 APP_VERSION = os.getenv("RENDER_GIT_COMMIT") or os.getenv("GIT_COMMIT") or os.getenv("COMMIT_SHA") or ""
 
 
@@ -450,6 +450,11 @@ def _score_ocr_text(text: str) -> int:
     return (alnum * 3) + useful + (spaces // 2) + length - (junk * 10)
 
 
+def _is_tesseract_timeout_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return "timed out" in message or "timeout" in message
+
+
 def extract_text_from_image(image: np.ndarray | list[np.ndarray]) -> str:
     try:
         candidates = image if isinstance(image, list) else [image]
@@ -473,7 +478,7 @@ def extract_text_from_image(image: np.ndarray | list[np.ndarray]) -> str:
                     ).strip()
                 except RuntimeError as exc:
                     # pytesseract raises RuntimeError on subprocess timeouts; try other variants.
-                    if "timed out" in str(exc).lower():
+                    if _is_tesseract_timeout_error(exc):
                         continue
                     raise
                 score = _score_ocr_text(extracted)
@@ -486,6 +491,28 @@ def extract_text_from_image(image: np.ndarray | list[np.ndarray]) -> str:
             else:
                 continue
             break
+
+        # If the main sweep timed out or produced little text, do a last quick fallback
+        # on the best-looking candidate to avoid a hard scan failure.
+        if best_score < 120 and candidates:
+            fallback_candidate = candidates[0]
+            fallback_configs = [
+                f"--oem 3 --psm 6 -l {TESSERACT_LANG} -c preserve_interword_spaces=1",
+                f"--oem 3 --psm 11 -l {TESSERACT_LANG} -c preserve_interword_spaces=1",
+            ]
+            for config in fallback_configs:
+                try:
+                    extracted = pytesseract.image_to_string(
+                        fallback_candidate, config=config, timeout=max(6, TESSERACT_TIMEOUT_SEC // 2)
+                    ).strip()
+                except RuntimeError as exc:
+                    if _is_tesseract_timeout_error(exc):
+                        continue
+                    raise
+                score = _score_ocr_text(extracted)
+                if score > best_score:
+                    best_score = score
+                    best_text = extracted
 
         text = best_text
     except getattr(pytesseract.pytesseract, "TesseractNotFoundError", OSError) as exc:
