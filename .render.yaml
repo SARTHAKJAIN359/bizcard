@@ -5,3 +5,16 @@ services:
     plan: free
     buildCommand: pip install -r requirements.txt
     startCommand: gunicorn app:app --bind 0.0.0.0:$PORT
+    packageManagers:
+      - type: apt
+        packages:
+          - tesseract-ocr
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12
+      - key: TESSERACT_CMD
+        value: /usr/bin/tesseract
+      - key: DATABASE_URL
+        fromDatabase:
+          name: bizscanner
+          property: connectionString

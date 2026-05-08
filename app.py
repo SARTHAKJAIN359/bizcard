@@ -67,6 +67,16 @@ def resolve_tesseract_cmd() -> str | None:
     if which:
         candidates.append(which)
 
+    if not _is_windows():
+        # If PATH is minimal/misconfigured, still try common absolute locations.
+        candidates.extend(
+            [
+                "/usr/bin/tesseract",
+                "/usr/local/bin/tesseract",
+                "/bin/tesseract",
+            ]
+        )
+
     if _is_windows():
         candidates.extend(
             [
