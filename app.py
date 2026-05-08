@@ -183,26 +183,173 @@ def preprocess_image(image_bytes: bytes) -> np.ndarray:
     return cleaned
 
 
-def extract_text_from_image(image: np.ndarray) -> str:
-    try:
-        config = (
-            f"--oem 3 --psm 6 -l {TESSERACT_LANG} "
-            "-c preserve_interword_spaces=1 "
-            "-c tessedit_char_blacklist=|"
-        )
-        # Try both the processed image and a softer grayscale variant.
-        candidates: list[np.ndarray] = [image]
-        try:
-            candidates.append(cv2.GaussianBlur(image, (3, 3), 0))
-        except Exception:
-            pass
+def _rotate_bound(gray_or_binary: np.ndarray, angle_deg: float) -> np.ndarray:
+    (h, w) = gray_or_binary.shape[:2]
+    center = (w / 2.0, h / 2.0)
+    m = cv2.getRotationMatrix2D(center, angle_deg, 1.0)
+    cos = abs(m[0, 0])
+    sin = abs(m[0, 1])
+    new_w = int((h * sin) + (w * cos))
+    new_h = int((h * cos) + (w * sin))
+    m[0, 2] += (new_w / 2.0) - center[0]
+    m[1, 2] += (new_h / 2.0) - center[1]
+    return cv2.warpAffine(
+        gray_or_binary,
+        m,
+        (new_w, new_h),
+        flags=cv2.INTER_CUBIC,
+        borderMode=cv2.BORDER_REPLICATE,
+    )
 
-        best = ""
+
+def _estimate_skew_angle(binary: np.ndarray) -> float:
+    """
+    Estimate skew angle from a binarized image (text as white on black or black on white).
+    Returns an angle in degrees for deskewing (rotate by -angle).
+    """
+    if binary.ndim != 2:
+        return 0.0
+
+    # Ensure "ink" is white for contour analysis.
+    work = binary
+    if np.mean(work) > 127:
+        work = 255 - work
+
+    coords = cv2.findNonZero(work)
+    if coords is None or len(coords) < 200:
+        return 0.0
+
+    rect = cv2.minAreaRect(coords)
+    angle = rect[-1]
+    # OpenCV returns angle in [-90, 0). Normalize to a small rotation.
+    if angle < -45:
+        angle = 90 + angle
+    # Ignore extreme rotations; business cards usually only mildly skewed.
+    if abs(angle) > 25:
+        return 0.0
+    return float(angle)
+
+
+def _generate_ocr_variants(image_bytes: bytes) -> list[np.ndarray]:
+    """
+    Create multiple preprocessing variants to handle:
+    - different font sizes
+    - low contrast / colored backgrounds
+    - uneven lighting / glare
+    - thin strokes
+    - mild skew
+    """
+    np_array = np.frombuffer(image_bytes, np.uint8)
+    image = cv2.imdecode(np_array, cv2.IMREAD_COLOR)
+    if image is None:
+        raise ValueError("Invalid image data.")
+
+    max_width = 2000
+    h, w = image.shape[:2]
+    if w > max_width:
+        scale = max_width / float(w)
+        image = cv2.resize(image, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
+
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+    # Illumination normalization: remove slow-varying background (glare/gradients).
+    background = cv2.GaussianBlur(gray, (0, 0), sigmaX=15)
+    norm = cv2.divide(gray, background, scale=255)
+
+    # Local contrast.
+    clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
+    norm = clahe.apply(norm)
+
+    # Denoise for small fonts.
+    denoised = cv2.fastNlMeansDenoising(norm, h=18, templateWindowSize=7, searchWindowSize=21)
+
+    # Unsharp mask for crisper edges (helps thin fonts).
+    blur = cv2.GaussianBlur(denoised, (0, 0), sigmaX=1.2)
+    sharp = cv2.addWeighted(denoised, 1.65, blur, -0.65, 0)
+
+    # Threshold variants.
+    _, otsu = cv2.threshold(sharp, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    adapt_g = cv2.adaptiveThreshold(sharp, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 31, 9)
+    adapt_m = cv2.adaptiveThreshold(sharp, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY, 31, 9)
+
+    # Deskew based on a stable binary mask.
+    skew_angle = _estimate_skew_angle(otsu)
+    if skew_angle != 0.0:
+        gray_deskew = _rotate_bound(sharp, skew_angle)
+        _, otsu_deskew = cv2.threshold(gray_deskew, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        adapt_g_deskew = cv2.adaptiveThreshold(
+            gray_deskew, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 31, 9
+        )
+    else:
+        gray_deskew = sharp
+        otsu_deskew = otsu
+        adapt_g_deskew = adapt_g
+
+    # Morphology to reduce speckle and improve character connectivity.
+    open_kernel = np.ones((2, 2), np.uint8)
+    close_kernel = np.ones((2, 2), np.uint8)
+    variants = [
+        gray_deskew,
+        cv2.morphologyEx(otsu_deskew, cv2.MORPH_OPEN, open_kernel, iterations=1),
+        cv2.morphologyEx(adapt_g_deskew, cv2.MORPH_OPEN, open_kernel, iterations=1),
+        cv2.morphologyEx(adapt_m, cv2.MORPH_OPEN, open_kernel, iterations=1),
+        cv2.morphologyEx(otsu_deskew, cv2.MORPH_CLOSE, close_kernel, iterations=1),
+    ]
+
+    # Inverted variants help when the card has dark background and light text.
+    variants.extend([255 - v for v in variants if v.ndim == 2])
+
+    # Deduplicate by basic hash to avoid repeated OCR work.
+    unique: list[np.ndarray] = []
+    seen: set[int] = set()
+    for v in variants:
+        key = hash(v.tobytes()[:4096]) ^ (v.shape[0] << 16) ^ v.shape[1]
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(v)
+
+    return unique
+
+
+def _score_ocr_text(text: str) -> int:
+    # Prefer more useful characters; penalize high junk ratio.
+    if not text:
+        return 0
+    stripped = text.strip()
+    if not stripped:
+        return 0
+
+    alnum = sum(ch.isalnum() for ch in stripped)
+    spaces = sum(ch.isspace() for ch in stripped)
+    useful = sum(ch in "@+-.(),:/&_#" for ch in stripped)
+    junk = sum((not ch.isprintable()) or (ch in "�") for ch in stripped)
+    # Reward length but keep it bounded.
+    length = min(len(stripped), 600)
+    return (alnum * 3) + useful + (spaces // 2) + length - (junk * 10)
+
+
+def extract_text_from_image(image: np.ndarray | list[np.ndarray]) -> str:
+    try:
+        candidates = image if isinstance(image, list) else [image]
+        psm_values = [6, 11]  # block of text, sparse text
+
+        best_text = ""
+        best_score = -1
         for candidate in candidates:
-            extracted = pytesseract.image_to_string(candidate, config=config).strip()
-            if len(extracted) > len(best):
-                best = extracted
-        text = best
+            for psm in psm_values:
+                config = (
+                    f"--oem 3 --psm {psm} -l {TESSERACT_LANG} "
+                    "-c preserve_interword_spaces=1 "
+                    "-c tessedit_char_blacklist=|"
+                )
+                extracted = pytesseract.image_to_string(candidate, config=config).strip()
+                score = _score_ocr_text(extracted)
+                if score > best_score:
+                    best_score = score
+                    best_text = extracted
+
+        text = best_text
     except getattr(pytesseract.pytesseract, "TesseractNotFoundError", OSError) as exc:
         resolved = RESOLVED_TESSERACT_CMD
         env_value = TESSERACT_CMD_ENV
@@ -356,8 +503,9 @@ def scan_card():
         return jsonify({"error": "No image uploaded."}), 400
 
     try:
-        processed = preprocess_image(image_file.read())
-        raw_text = extract_text_from_image(processed)
+        image_bytes = image_file.read()
+        variants = _generate_ocr_variants(image_bytes)
+        raw_text = extract_text_from_image(variants)
         structured = get_structured_data_with_groq(raw_text)
     except OCRDependencyError as exc:
         return jsonify({"error": str(exc)}), 400
