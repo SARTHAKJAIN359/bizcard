@@ -19,6 +19,7 @@ from werkzeug.exceptions import HTTPException
 load_dotenv()
 
 app = Flask(__name__)
+app.config["MAX_CONTENT_LENGTH"] = 8 * 1024 * 1024
 
 # Database configuration
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///knowledge_base.db")
@@ -75,11 +76,12 @@ JSON_KB_PATH = INSTANCE_DIR / "knowledge_base.json"
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
+GROQ_TIMEOUT_SEC = int(os.getenv("GROQ_TIMEOUT_SEC", "15") or "15")
 TESSERACT_CMD_ENV = os.getenv("TESSERACT_CMD", "").strip()
 TESSERACT_LANG = os.getenv("TESSERACT_LANG", "eng").strip() or "eng"
-TESSERACT_TIMEOUT_SEC = int(os.getenv("TESSERACT_TIMEOUT_SEC", "12") or "12")
-OCR_MAX_VARIANTS = int(os.getenv("OCR_MAX_VARIANTS", "5") or "5")
-OCR_TIME_BUDGET_SEC = int(os.getenv("OCR_TIME_BUDGET_SEC", "18") or "18")
+TESSERACT_TIMEOUT_SEC = int(os.getenv("TESSERACT_TIMEOUT_SEC", "6") or "6")
+OCR_MAX_VARIANTS = int(os.getenv("OCR_MAX_VARIANTS", "4") or "4")
+OCR_TIME_BUDGET_SEC = int(os.getenv("OCR_TIME_BUDGET_SEC", "10") or "10")
 APP_VERSION = os.getenv("RENDER_GIT_COMMIT") or os.getenv("GIT_COMMIT") or os.getenv("COMMIT_SHA") or ""
 
 
@@ -188,6 +190,94 @@ def _clean_phone(value: str | None) -> str | None:
     if len(digits) < 8:
         return None
     return compact
+
+
+def _extract_json_object(text: str) -> dict[str, Any] | None:
+    if not text:
+        return None
+
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        cleaned = cleaned.replace("```json", "").replace("```", "").strip()
+
+    try:
+        parsed = json.loads(cleaned)
+        if isinstance(parsed, dict):
+            return parsed
+    except Exception:
+        pass
+
+    start = cleaned.find("{")
+    end = cleaned.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        return None
+
+    snippet = cleaned[start : end + 1]
+    try:
+        parsed = json.loads(snippet)
+        if isinstance(parsed, dict):
+            return parsed
+    except Exception:
+        return None
+    return None
+
+
+def _heuristic_structured_data(raw_text: str) -> Dict[str, Any]:
+    lines = [line.strip(" ,;:|") for line in (raw_text or "").splitlines()]
+    lines = [line for line in lines if line]
+
+    phone_pattern = re.compile(r"(\+?\d[\d\s().-]{6,}\d)")
+    website_pattern = re.compile(r"(?i)\b(?:https?://)?(?:www\.)?[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+(?:/[^\s]*)?")
+    address_keywords = ("street", "st.", "st ", "road", "rd.", "rd ", "avenue", "ave", "blvd", "lane", "ln", "drive", "dr", "city", "state", "zip")
+    title_keywords = ("manager", "director", "founder", "co-founder", "owner", "engineer", "lead", "head", "president", "ceo", "cto", "cmo", "sales", "marketing", "consultant")
+    company_keywords = ("inc", "llc", "ltd", "corp", "corporation", "company", "co.", "solutions", "studio", "technologies", "systems", "group", "services", "labs")
+
+    phone_match = phone_pattern.search(raw_text or "")
+    website_match = website_pattern.search(raw_text or "")
+
+    name = None
+    company_name = None
+    designation = None
+    address_lines: list[str] = []
+
+    for idx, line in enumerate(lines):
+        lower = line.lower()
+        if not name and len(line.split()) <= 4 and any(ch.isalpha() for ch in line) and not phone_pattern.search(line) and not website_pattern.search(line):
+            if idx == 0 or idx == 1:
+                name = line
+                continue
+
+        if not company_name and any(keyword in lower for keyword in company_keywords):
+            company_name = line
+            continue
+
+        if not designation and any(keyword in lower for keyword in title_keywords):
+            designation = line
+            continue
+
+        if any(keyword in lower for keyword in address_keywords) or re.search(r"\d", line):
+            if len(line) > 10:
+                address_lines.append(line)
+
+    if not company_name and len(lines) > 1:
+        candidate = next((line for line in lines if line.isupper() and len(line) > 2), None)
+        if candidate:
+            company_name = candidate
+
+    address = ", ".join(address_lines[:3]) if address_lines else None
+    website = website_match.group(0) if website_match else None
+    phone = phone_match.group(0) if phone_match else None
+
+    return normalize_response(
+        {
+            "name": name,
+            "number": phone,
+            "address": address,
+            "website": website,
+            "company_name": company_name,
+            "designation": designation,
+        }
+    )
 
 
 def validate_and_flag(data: Dict[str, Any], raw_text: str) -> tuple[Dict[str, Any], dict[str, Any]]:
@@ -568,7 +658,7 @@ def normalize_response(data: Dict[str, Any]) -> Dict[str, Any]:
 
 def get_structured_data_with_groq(raw_text: str) -> Dict[str, Any]:
     if not GROQ_API_KEY:
-        raise RuntimeError("Missing GROQ_API_KEY in .env file.")
+        return _heuristic_structured_data(raw_text)
 
     prompt = (
         "You are an information extraction assistant for business cards.\n"
@@ -599,15 +689,21 @@ def get_structured_data_with_groq(raw_text: str) -> Dict[str, Any]:
         "Content-Type": "application/json",
     }
 
-    response = requests.post(GROQ_URL, headers=headers, json=payload, timeout=45)
-    response.raise_for_status()
-    model_text = response.json()["choices"][0]["message"]["content"].strip()
-
-    if model_text.startswith("```"):
-        model_text = model_text.replace("```json", "").replace("```", "").strip()
-
-    parsed = json.loads(model_text)
-    return normalize_response(parsed)
+    try:
+        response = requests.post(GROQ_URL, headers=headers, json=payload, timeout=GROQ_TIMEOUT_SEC)
+        response.raise_for_status()
+        response_payload = response.json()
+        model_text = response_payload.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+        parsed = _extract_json_object(model_text)
+        if not parsed:
+            raise RuntimeError("Groq response did not include valid JSON.")
+        return normalize_response(parsed)
+    except Exception:
+        # Best-effort fallback: keep the scan usable even when the model misbehaves.
+        fallback = _heuristic_structured_data(raw_text)
+        if any(value is not None for value in fallback.values()):
+            return fallback
+        raise
 
 
 def append_to_knowledge_base(entry: Dict[str, Any]) -> BusinessCard:
@@ -674,6 +770,7 @@ def scan_card():
         raw_text = extract_text_from_image(variants)
         structured_raw = get_structured_data_with_groq(raw_text)
         structured, meta = validate_and_flag(structured_raw, raw_text=raw_text)
+        meta["source"] = "groq" if GROQ_API_KEY else "heuristic"
     except OCRDependencyError as exc:
         return jsonify({"error": str(exc)}), 400
     except Exception as exc:

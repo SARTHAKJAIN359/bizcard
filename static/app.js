@@ -63,7 +63,7 @@ function setBadge(state) {
   if (!detailsBadge) return;
   const map = {
     waiting: { label: "Waiting" },
-    scanning: { label: "Scanning…" },
+    scanning: { label: "Scanning..." },
     review: { label: "Review" },
     saved: { label: "Saved" },
   };
@@ -194,7 +194,7 @@ async function scanCard(file) {
   if (objectUrl) URL.revokeObjectURL(objectUrl);
   objectUrl = URL.createObjectURL(file);
   preview.src = objectUrl;
-  scanStatus.textContent = "Scanning… this can take a few seconds.";
+  scanStatus.textContent = "Scanning... this can take a few seconds.";
   errorMessage.textContent = "";
   scanBtn.disabled = true;
   scanBtn.classList.add("loading");
