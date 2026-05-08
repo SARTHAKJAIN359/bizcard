@@ -12,15 +12,40 @@ const toast = document.getElementById("toast");
 const copyLastJsonBtn = document.getElementById("copyLastJsonBtn");
 const lastCardFields = document.getElementById("lastCardFields");
 const lastCardJson = document.getElementById("lastCardJson");
+const clearBtn = document.getElementById("clearBtn");
+const detailsBadge = document.getElementById("detailsBadge");
+const steps = Array.from(document.querySelectorAll(".stepper .step"));
 
 let confirmedOnce = false;
 let selectedFile = null;
 let lastConfirmedCard = null;
+let isScanning = false;
+let isSaving = false;
+let objectUrl = null;
 
 function showToast(message) {
   toast.textContent = message;
   toast.classList.add("show");
   setTimeout(() => toast.classList.remove("show"), 2200);
+}
+
+function setStep(stepNumber) {
+  for (const el of steps) {
+    const s = Number(el.getAttribute("data-step"));
+    el.classList.toggle("active", s === stepNumber);
+    el.classList.toggle("done", s < stepNumber);
+  }
+}
+
+function setBadge(state) {
+  if (!detailsBadge) return;
+  const map = {
+    waiting: { label: "Waiting" },
+    scanning: { label: "Scanning…" },
+    review: { label: "Review" },
+    saved: { label: "Saved" },
+  };
+  detailsBadge.textContent = map[state]?.label || "Waiting";
 }
 
 function setFormData(data = {}) {
@@ -105,17 +130,24 @@ function renderLastConfirmedCard(card) {
 
 async function scanCard(file) {
   if (!file) return;
+  if (isScanning) return;
+  isScanning = true;
 
   const formData = new FormData();
   formData.append("image", file);
 
   previewSection.style.display = "block";
-  preview.src = URL.createObjectURL(file);
-  scanStatus.textContent = "Scanning image... please wait.";
+  if (objectUrl) URL.revokeObjectURL(objectUrl);
+  objectUrl = URL.createObjectURL(file);
+  preview.src = objectUrl;
+  scanStatus.textContent = "Scanning… this can take a few seconds.";
   errorMessage.textContent = "";
   scanBtn.disabled = true;
+  scanBtn.classList.add("loading");
   confirmBtn.disabled = true;
   confirmedOnce = false;
+  setStep(2);
+  setBadge("scanning");
 
   try {
     const res = await fetch("/scan", { method: "POST", body: formData });
@@ -125,15 +157,21 @@ async function scanCard(file) {
     setFormData(payload.data || {});
     ocrText.textContent = payload.raw_text || "No text detected.";
     confirmBtn.disabled = false;
-    scanStatus.textContent = "Scan complete. Please review and confirm entries.";
+    scanStatus.textContent = "Scan complete. Review the fields and tap Save.";
     showToast("Business card scanned successfully");
+    setStep(3);
+    setBadge("review");
   } catch (error) {
     ocrText.textContent = `Error: ${error.message}`;
     scanStatus.textContent = "Scan failed.";
     errorMessage.textContent = error.message;
     showToast(error.message);
+    setStep(1);
+    setBadge("waiting");
   } finally {
     scanBtn.disabled = !selectedFile;
+    scanBtn.classList.remove("loading");
+    isScanning = false;
   }
 }
 
@@ -141,21 +179,49 @@ function onFileSelected(file) {
   if (!file) return;
   selectedFile = file;
   previewSection.style.display = "block";
-  preview.src = URL.createObjectURL(file);
+  if (objectUrl) URL.revokeObjectURL(objectUrl);
+  objectUrl = URL.createObjectURL(file);
+  preview.src = objectUrl;
   scanBtn.disabled = false;
-  scanStatus.textContent = "Image ready. Tap Scan Card to start conversion.";
+  scanStatus.textContent = "Ready. Tap Scan Card to extract details.";
   errorMessage.textContent = "";
+  clearBtn && (clearBtn.disabled = false);
+  setStep(1);
+  setBadge("waiting");
 }
 
 uploadInput.addEventListener("change", (e) => onFileSelected(e.target.files[0]));
 cameraInput.addEventListener("change", (e) => onFileSelected(e.target.files[0]));
 scanBtn.addEventListener("click", () => scanCard(selectedFile));
 
+function clearSelection() {
+  selectedFile = null;
+  scanBtn.disabled = true;
+  confirmBtn.disabled = true;
+  confirmedOnce = false;
+  if (objectUrl) URL.revokeObjectURL(objectUrl);
+  objectUrl = null;
+  previewSection.style.display = "none";
+  preview.removeAttribute("src");
+  scanStatus.textContent = "Choose an image to begin.";
+  errorMessage.textContent = "";
+  ocrText.textContent = "Scan a business card to see extracted text.";
+  setFormData({});
+  clearBtn && (clearBtn.disabled = true);
+  setStep(1);
+  setBadge("waiting");
+}
+
+clearBtn?.addEventListener("click", clearSelection);
+
 form.addEventListener("submit", async (e) => {
   e.preventDefault();
   if (confirmedOnce) return;
+  if (isSaving) return;
+  isSaving = true;
 
   confirmBtn.disabled = true;
+  confirmBtn.classList.add("loading");
   const data = getFormData();
 
   try {
@@ -168,15 +234,21 @@ form.addEventListener("submit", async (e) => {
     if (!res.ok) throw new Error(payload.error || "Failed to save.");
 
     confirmedOnce = true;
-    scanStatus.textContent = "Entry confirmed and saved to knowledge base.";
+    scanStatus.textContent = "Saved. You can scan another card.";
     errorMessage.textContent = "";
-    showToast("Confirmed and saved to knowledge base");
+    showToast("Saved");
     renderLastConfirmedCard(payload.data);
+    setStep(4);
+    setBadge("saved");
+    // Keep preview and form so users can verify, but allow a new scan.
+    scanBtn.disabled = !selectedFile;
   } catch (error) {
     confirmBtn.disabled = false;
     errorMessage.textContent = error.message;
     showToast(error.message);
   }
+  confirmBtn.classList.remove("loading");
+  isSaving = false;
 });
 
 copyLastJsonBtn?.addEventListener("click", async () => {
@@ -190,3 +262,5 @@ copyLastJsonBtn?.addEventListener("click", async () => {
 });
 
 renderLastConfirmedCard(null);
+setStep(1);
+setBadge("waiting");

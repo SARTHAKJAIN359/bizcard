@@ -3,49 +3,118 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Business Card Scanner</title>
+    <title>BizScanner</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
   </head>
   <body>
     <main class="container">
-      <header class="header">
-        <h1>BizScanner</h1>
-        <p class="subtitle">Scan a business card and save the contact details.</p>
+      <header class="topbar">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true">B</div>
+          <div>
+            <h1 class="brand-title">BizScanner</h1>
+            <p class="brand-subtitle">Scan a card. Review. Save.</p>
+          </div>
+        </div>
+        <div class="topbar-actions">
+          <a class="link" href="/health" target="_blank" rel="noreferrer">Status</a>
+        </div>
       </header>
 
-      <section class="card actions">
-        <label class="btn">
-          Choose Photo
-          <input id="uploadInput" type="file" accept="image/*" />
-        </label>
-
-        <label class="btn secondary">
-          Use Camera
-          <input id="cameraInput" type="file" accept="image/*" capture="environment" />
-        </label>
-        <button id="scanBtn" class="btn scan" type="button" disabled>Scan Card</button>
+      <section class="stepper" aria-label="Scan steps">
+        <div class="step active" data-step="1">
+          <div class="dot" aria-hidden="true"></div>
+          <div class="label">Select</div>
+        </div>
+        <div class="line" aria-hidden="true"></div>
+        <div class="step" data-step="2">
+          <div class="dot" aria-hidden="true"></div>
+          <div class="label">Scan</div>
+        </div>
+        <div class="line" aria-hidden="true"></div>
+        <div class="step" data-step="3">
+          <div class="dot" aria-hidden="true"></div>
+          <div class="label">Review</div>
+        </div>
+        <div class="line" aria-hidden="true"></div>
+        <div class="step" data-step="4">
+          <div class="dot" aria-hidden="true"></div>
+          <div class="label">Saved</div>
+        </div>
       </section>
 
-      <p id="scanStatus" class="status" aria-live="polite">Choose an image to begin.</p>
-      <p id="errorMessage" class="error" aria-live="assertive"></p>
+      <section class="card hero">
+        <div class="hero-copy">
+          <h2 class="hero-title">Business Card Scanner</h2>
+          <p class="hero-subtitle">Works best with a clear, flat photo and good lighting.</p>
+        </div>
+        <div class="actions">
+          <label class="btn">
+            Choose Photo
+            <input id="uploadInput" type="file" accept="image/*" />
+          </label>
 
-      <section class="card preview-section">
-        <h2>Uploaded Business Card</h2>
+          <label class="btn secondary">
+            Use Camera
+            <input id="cameraInput" type="file" accept="image/*" capture="environment" />
+          </label>
+          <button id="scanBtn" class="btn scan" type="button" disabled>
+            <span class="btn-text">Scan Card</span>
+            <span class="spinner" aria-hidden="true"></span>
+          </button>
+        </div>
+
+        <div class="status-row" role="status" aria-live="polite">
+          <div id="scanStatus" class="status">Choose an image to begin.</div>
+          <div id="errorMessage" class="error" aria-live="assertive"></div>
+        </div>
+      </section>
+
+      <section class="card preview-section" aria-label="Selected image preview">
+        <div class="section-header">
+          <h2>Preview</h2>
+          <button id="clearBtn" class="btn ghost small" type="button" disabled>Clear</button>
+        </div>
         <img id="preview" alt="Business card preview" />
       </section>
 
       <section class="card">
-        <h2>Extracted Information</h2>
+        <div class="section-header">
+          <h2>Details</h2>
+          <span class="badge" id="detailsBadge">Waiting</span>
+        </div>
         <form id="detailsForm">
           <div class="grid">
-            <label>Name<input name="name" /></label>
-            <label>Number<input name="number" /></label>
-            <label>Address<textarea name="address" rows="3"></textarea></label>
-            <label>Website<input name="website" /></label>
-            <label>Company Name<input name="company_name" /></label>
-            <label>Designation<input name="designation" /></label>
+            <label class="field">
+              <span class="field-label">Name</span>
+              <input name="name" autocomplete="name" placeholder="e.g., Priya Sharma" />
+            </label>
+            <label class="field">
+              <span class="field-label">Phone</span>
+              <input name="number" autocomplete="tel" placeholder="e.g., +1 555 123 4567" inputmode="tel" />
+            </label>
+            <label class="field span-2">
+              <span class="field-label">Address</span>
+              <textarea name="address" rows="3" placeholder="Street, City, State"></textarea>
+            </label>
+            <label class="field">
+              <span class="field-label">Website</span>
+              <input name="website" autocomplete="url" placeholder="e.g., example.com" inputmode="url" />
+            </label>
+            <label class="field">
+              <span class="field-label">Company</span>
+              <input name="company_name" autocomplete="organization" placeholder="e.g., Acme Inc." />
+            </label>
+            <label class="field span-2">
+              <span class="field-label">Title</span>
+              <input name="designation" autocomplete="organization-title" placeholder="e.g., Sales Manager" />
+            </label>
           </div>
-          <button id="confirmBtn" class="btn confirm" type="submit" disabled>Confirm Entries</button>
+          <button id="confirmBtn" class="btn confirm" type="submit" disabled>
+            <span class="btn-text">Save</span>
+            <span class="spinner" aria-hidden="true"></span>
+          </button>
+          <p class="microcopy">Tip: edit any field before saving. Missing fields will be stored as <code>null</code>.</p>
         </form>
       </section>
 
