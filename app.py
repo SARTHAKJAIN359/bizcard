@@ -255,7 +255,11 @@ def _heuristic_structured_data(raw_text: str) -> Dict[str, Any]:
             designation = line
             continue
 
-        if any(keyword in lower for keyword in address_keywords) or re.search(r"\d", line):
+        looks_like_phone = bool(phone_pattern.search(line))
+        looks_like_website = bool(website_pattern.search(line))
+        if looks_like_phone or looks_like_website:
+            continue
+        if any(keyword in lower for keyword in address_keywords) or (re.search(r"\d", line) and len(line) > 12):
             if len(line) > 10:
                 address_lines.append(line)
 
@@ -682,6 +686,7 @@ def get_structured_data_with_groq(raw_text: str) -> Dict[str, Any]:
             {"role": "system", "content": "You extract business card details to strict JSON."},
             {"role": "user", "content": prompt},
         ],
+        "response_format": {"type": "json_object"},
     }
 
     headers = {
@@ -693,9 +698,14 @@ def get_structured_data_with_groq(raw_text: str) -> Dict[str, Any]:
         response = requests.post(GROQ_URL, headers=headers, json=payload, timeout=GROQ_TIMEOUT_SEC)
         response.raise_for_status()
         response_payload = response.json()
-        model_text = response_payload.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+        message = response_payload.get("choices", [{}])[0].get("message", {})
+        model_text = (message.get("content") or "").strip()
         parsed = _extract_json_object(model_text)
+        if not parsed and isinstance(message.get("parsed"), dict):
+            parsed = message["parsed"]
         if not parsed:
+            parsed = response_payload if isinstance(response_payload, dict) else None
+        if not isinstance(parsed, dict):
             raise RuntimeError("Groq response did not include valid JSON.")
         return normalize_response(parsed)
     except Exception:
