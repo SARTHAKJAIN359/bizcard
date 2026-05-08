@@ -31,13 +31,24 @@ python -m pip install -r requirements.txt
 copy .env.example .env
 ```
 
-4. Edit `.env` and set your Groq API key and optional Tesseract path.
+4. Edit `.env` and set your Groq API key. Database defaults to local SQLite.
+
+## Database
+
+- **Local development:** Uses SQLite (`knowledge_base.db`)
+- **Render deployment:** Uses PostgreSQL (data persists across restarts)
+
+To use PostgreSQL locally, set in `.env`:
+```
+DATABASE_URL=postgresql://user:password@localhost/bizscanner
+```
 
 ## Environment Variables
 
 - `GROQ_API_KEY` — required Groq API key
 - `GROQ_MODEL` — optional model name (default: `llama-3.1-8b-instant`)
 - `TESSERACT_CMD` — optional path to `tesseract.exe` or install folder
+- `DATABASE_URL` — optional database URL (defaults to local SQLite)
 
 ## Run
 
@@ -51,9 +62,17 @@ Open `http://127.0.0.1:5000` in your browser.
 
 1. Push this repository to GitHub.
 2. Create a new Web Service on Render and connect your GitHub repository.
-3. Use the default Python environment.
-4. Render will install dependencies from `requirements.txt` and run:
+3. Add environment variables:
+   - `GROQ_API_KEY` — your Groq API key
+   - `TESSERACT_CMD` — optional (Tesseract is not pre-installed on Render)
 
+4. **Optional: Use Render PostgreSQL**
+   - Create a PostgreSQL database on Render
+   - Copy the database URL from Render
+   - Add `DATABASE_URL` environment variable to your Web Service
+   - Your business card data will persist across restarts
+
+Render will install dependencies from `requirements.txt` and run:
 ```bash
 gunicorn app:app --bind 0.0.0.0:$PORT
 ```

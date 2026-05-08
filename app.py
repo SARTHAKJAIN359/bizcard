@@ -10,13 +10,24 @@ import pytesseract
 import requests
 from dotenv import load_dotenv
 from flask import Flask, jsonify, render_template, request
+from flask_sqlalchemy import SQLAlchemy
 
 load_dotenv()
 
 app = Flask(__name__)
 
+# Database configuration
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///knowledge_base.db")
+# Handle Render's postgres:// URLs (should be postgresql://)
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+
+app.config["SQLALCHEMY_DATABASE_URI"] = DATABASE_URL
+app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+
+db = SQLAlchemy(app)
+
 BASE_DIR = Path(__file__).resolve().parent
-KNOWLEDGE_BASE_FILE = BASE_DIR / "knowledge_base.json"
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
@@ -38,6 +49,33 @@ TARGET_FIELDS = [
     "company_name",
     "designation",
 ]
+
+
+# Database model
+class BusinessCard(db.Model):
+    __tablename__ = "business_cards"
+    
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(255))
+    number = db.Column(db.String(255))
+    address = db.Column(db.Text)
+    website = db.Column(db.String(255))
+    company_name = db.Column(db.String(255))
+    designation = db.Column(db.String(255))
+    confirmed_at = db.Column(db.DateTime, default=datetime.utcnow)
+    
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "name": self.name,
+            "number": self.number,
+            "address": self.address,
+            "website": self.website,
+            "company_name": self.company_name,
+            "designation": self.designation,
+            "confirmed_at": self.confirmed_at.isoformat() + "Z" if self.confirmed_at else None,
+        }
+
 
 
 def preprocess_image(image_bytes: bytes) -> np.ndarray:
@@ -121,25 +159,22 @@ def get_structured_data_with_groq(raw_text: str) -> Dict[str, Any]:
     return normalize_response(parsed)
 
 
-def append_to_knowledge_base(entry: Dict[str, Any]) -> None:
-    if KNOWLEDGE_BASE_FILE.exists():
-        with KNOWLEDGE_BASE_FILE.open("r", encoding="utf-8") as f:
-            try:
-                records = json.load(f)
-            except json.JSONDecodeError:
-                records = []
-    else:
-        records = []
-
-    records.append(
-        {
-            "confirmed_at": datetime.utcnow().isoformat() + "Z",
-            "data": normalize_response(entry),
-        }
+def append_to_knowledge_base(entry: Dict[str, Any]) -> BusinessCard:
+    """Save a business card entry to the database."""
+    confirmed = normalize_response(entry)
+    
+    card = BusinessCard(
+        name=confirmed.get("name"),
+        number=confirmed.get("number"),
+        address=confirmed.get("address"),
+        website=confirmed.get("website"),
+        company_name=confirmed.get("company_name"),
+        designation=confirmed.get("designation"),
     )
-
-    with KNOWLEDGE_BASE_FILE.open("w", encoding="utf-8") as f:
-        json.dump(records, f, indent=2)
+    
+    db.session.add(card)
+    db.session.commit()
+    return card
 
 
 @app.get("/")
@@ -167,9 +202,22 @@ def scan_card():
 def confirm_data():
     payload = request.get_json(silent=True) or {}
     data = payload.get("data", {})
-    confirmed = normalize_response(data)
-    append_to_knowledge_base(confirmed)
-    return jsonify({"message": "Saved to knowledge base.", "data": confirmed})
+    
+    try:
+        card = append_to_knowledge_base(data)
+        return jsonify({"message": "Saved to knowledge base.", "data": card.to_dict()}), 200
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.get("/cards")
+def get_all_cards():
+    """Retrieve all saved business cards."""
+    try:
+        cards = BusinessCard.query.order_by(BusinessCard.confirmed_at.desc()).all()
+        return jsonify({"cards": [card.to_dict() for card in cards]}), 200
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
 
 
 @app.get("/health")
@@ -177,5 +225,16 @@ def health():
     return jsonify({"status": "ok"})
 
 
+@app.before_request
+def init_db():
+    """Initialize database tables on first request."""
+    if not hasattr(init_db, "done"):
+        with app.app_context():
+            db.create_all()
+        init_db.done = True
+
+
 if __name__ == "__main__":
+    with app.app_context():
+        db.create_all()
     app.run(host="0.0.0.0", port=5000, debug=True)
