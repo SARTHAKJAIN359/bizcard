@@ -155,6 +155,16 @@ pre {
   font-size: 0.86rem;
 }
 
+details > summary {
+  cursor: pointer;
+  font-weight: 800;
+  color: #111827;
+}
+
+.details-card summary {
+  margin-bottom: 10px;
+}
+
 code {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
   font-size: 0.9em;

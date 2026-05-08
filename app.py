@@ -29,6 +29,8 @@ app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 db = SQLAlchemy(app)
 
 BASE_DIR = Path(__file__).resolve().parent
+INSTANCE_DIR = BASE_DIR / "instance"
+JSON_KB_PATH = INSTANCE_DIR / "knowledge_base.json"
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
@@ -267,6 +269,35 @@ def append_to_knowledge_base(entry: Dict[str, Any]) -> BusinessCard:
     return card
 
 
+def append_to_json_kb(entry: Dict[str, Any], confirmed_at: datetime) -> None:
+    """
+    Best-effort append to a JSON knowledge base file.
+
+    Stored under ./instance so it doesn't get committed to git and matches the typical Flask instance pattern.
+    """
+    INSTANCE_DIR.mkdir(parents=True, exist_ok=True)
+
+    record = {
+        "confirmed_at": confirmed_at.isoformat() + "Z",
+        "data": normalize_response(entry),
+    }
+
+    items: list[dict[str, Any]]
+    if JSON_KB_PATH.exists():
+        try:
+            loaded = json.loads(JSON_KB_PATH.read_text(encoding="utf-8"))
+            items = loaded if isinstance(loaded, list) else []
+        except Exception:
+            items = []
+    else:
+        items = []
+
+    items.append(record)
+    tmp_path = JSON_KB_PATH.with_suffix(".json.tmp")
+    tmp_path.write_text(json.dumps(items, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp_path, JSON_KB_PATH)
+
+
 @app.get("/")
 def index():
     return render_template("index.html")
@@ -297,7 +328,25 @@ def confirm_data():
     
     try:
         card = append_to_knowledge_base(data)
-        return jsonify({"message": "Saved to knowledge base.", "data": card.to_dict()}), 200
+        json_saved = True
+        json_error = None
+        try:
+            append_to_json_kb(data, confirmed_at=card.confirmed_at or datetime.utcnow())
+        except Exception as exc:
+            json_saved = False
+            json_error = str(exc)
+
+        return (
+            jsonify(
+                {
+                    "message": "Saved to knowledge base.",
+                    "data": card.to_dict(),
+                    "json_saved": json_saved,
+                    "json_error": json_error,
+                }
+            ),
+            200,
+        )
     except Exception as exc:
         return jsonify({"error": str(exc)}), 500
 

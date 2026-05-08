@@ -53,6 +53,12 @@ function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
+function displayValue(value) {
+  if (value === null || value === undefined) return "—";
+  const text = String(value).trim();
+  return text ? text : "—";
+}
+
 function formatDate(isoString) {
   if (!isoString) return "";
   const date = new Date(isoString);
@@ -73,13 +79,13 @@ function renderLastConfirmedCard(card) {
 
   lastCardTbody.innerHTML = `
     <tr>
-      <td>${escapeHtml(lastConfirmedCard.id)}</td>
-      <td>${escapeHtml(lastConfirmedCard.name)}</td>
-      <td>${escapeHtml(lastConfirmedCard.number)}</td>
-      <td>${escapeHtml(lastConfirmedCard.company_name)}</td>
-      <td>${escapeHtml(lastConfirmedCard.designation)}</td>
-      <td>${escapeHtml(lastConfirmedCard.website)}</td>
-      <td>${escapeHtml(formatDate(lastConfirmedCard.confirmed_at))}</td>
+      <td>${escapeHtml(displayValue(lastConfirmedCard.id))}</td>
+      <td>${escapeHtml(displayValue(lastConfirmedCard.name))}</td>
+      <td>${escapeHtml(displayValue(lastConfirmedCard.number))}</td>
+      <td>${escapeHtml(displayValue(lastConfirmedCard.company_name))}</td>
+      <td>${escapeHtml(displayValue(lastConfirmedCard.designation))}</td>
+      <td>${escapeHtml(displayValue(lastConfirmedCard.website))}</td>
+      <td>${escapeHtml(displayValue(formatDate(lastConfirmedCard.confirmed_at)))}</td>
     </tr>
   `;
 
