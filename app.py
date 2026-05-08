@@ -5,6 +5,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict
 import re
+from time import monotonic
 
 import cv2
 import numpy as np
@@ -76,6 +77,10 @@ GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 TESSERACT_CMD_ENV = os.getenv("TESSERACT_CMD", "").strip()
 TESSERACT_LANG = os.getenv("TESSERACT_LANG", "eng").strip() or "eng"
+TESSERACT_TIMEOUT_SEC = int(os.getenv("TESSERACT_TIMEOUT_SEC", "8") or "8")
+OCR_MAX_VARIANTS = int(os.getenv("OCR_MAX_VARIANTS", "8") or "8")
+OCR_TIME_BUDGET_SEC = int(os.getenv("OCR_TIME_BUDGET_SEC", "22") or "22")
+APP_VERSION = os.getenv("RENDER_GIT_COMMIT") or os.getenv("GIT_COMMIT") or os.getenv("COMMIT_SHA") or ""
 
 
 class OCRDependencyError(RuntimeError):
@@ -452,18 +457,35 @@ def extract_text_from_image(image: np.ndarray | list[np.ndarray]) -> str:
 
         best_text = ""
         best_score = -1
+        start = monotonic()
         for candidate in candidates:
             for psm in psm_values:
+                if monotonic() - start > OCR_TIME_BUDGET_SEC:
+                    break
                 config = (
                     f"--oem 3 --psm {psm} -l {TESSERACT_LANG} "
                     "-c preserve_interword_spaces=1 "
                     "-c tessedit_char_blacklist=|"
                 )
-                extracted = pytesseract.image_to_string(candidate, config=config).strip()
+                try:
+                    extracted = pytesseract.image_to_string(
+                        candidate, config=config, timeout=TESSERACT_TIMEOUT_SEC
+                    ).strip()
+                except RuntimeError as exc:
+                    # pytesseract raises RuntimeError on subprocess timeouts; try other variants.
+                    if "timed out" in str(exc).lower():
+                        continue
+                    raise
                 score = _score_ocr_text(extracted)
                 if score > best_score:
                     best_score = score
                     best_text = extracted
+                    # Early exit once we have a strong result.
+                    if best_score > 1200 and len(best_text) > 220:
+                        break
+            else:
+                continue
+            break
 
         text = best_text
     except getattr(pytesseract.pytesseract, "TesseractNotFoundError", OSError) as exc:
@@ -621,7 +643,7 @@ def scan_card():
 
     try:
         image_bytes = image_file.read()
-        variants = _generate_ocr_variants(image_bytes)
+        variants = _generate_ocr_variants(image_bytes)[: max(OCR_MAX_VARIANTS, 1)]
         raw_text = extract_text_from_image(variants)
         structured_raw = get_structured_data_with_groq(raw_text)
         structured, meta = validate_and_flag(structured_raw, raw_text=raw_text)
@@ -678,6 +700,7 @@ def health():
     return jsonify(
         {
             "status": "ok",
+            "version": APP_VERSION or None,
             "tesseract_available": bool(RESOLVED_TESSERACT_CMD),
             "tesseract_cmd": RESOLVED_TESSERACT_CMD,
             "tesseract_env": TESSERACT_CMD_ENV,
