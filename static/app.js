@@ -14,6 +14,7 @@ const lastCardFields = document.getElementById("lastCardFields");
 const lastCardJson = document.getElementById("lastCardJson");
 const clearBtn = document.getElementById("clearBtn");
 const detailsBadge = document.getElementById("detailsBadge");
+const sourcePill = document.getElementById("sourcePill");
 const steps = Array.from(document.querySelectorAll(".stepper .step"));
 const warningsBox = document.getElementById("warnings");
 
@@ -68,6 +69,14 @@ function setBadge(state) {
     saved: { label: "Saved" },
   };
   detailsBadge.textContent = map[state]?.label || "Waiting";
+}
+
+function setSource(source) {
+  if (!sourcePill) return;
+  const normalized = source || "waiting";
+  sourcePill.textContent = `Source: ${normalized}`;
+  sourcePill.classList.toggle("groq", normalized === "groq");
+  sourcePill.classList.toggle("heuristic", normalized === "heuristic");
 }
 
 function setFormData(data = {}) {
@@ -220,6 +229,7 @@ async function scanCard(file) {
     const meta = payload.meta || {};
     showWarnings(meta.warnings || []);
     markNeedsReview(meta.low_confidence_fields || []);
+    setSource(meta.source || "groq");
 
     // Auto-scroll to the review form on mobile after scan completes.
     setTimeout(() => {
@@ -272,6 +282,7 @@ function clearSelection() {
   ocrText.textContent = "Scan a business card to see extracted text.";
   setFormData({});
   clearReviewMarkers();
+  setSource("waiting");
   clearBtn && (clearBtn.disabled = true);
   setStep(1);
   setBadge("waiting");
@@ -341,3 +352,4 @@ copyLastJsonBtn?.addEventListener("click", async () => {
 renderLastConfirmedCard(null);
 setStep(1);
 setBadge("waiting");
+setSource("waiting");

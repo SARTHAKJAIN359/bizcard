@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Dict
 import re
 from time import monotonic
+from difflib import SequenceMatcher
 
 import cv2
 import numpy as np
@@ -192,6 +193,19 @@ def _clean_phone(value: str | None) -> str | None:
     return compact
 
 
+def _best_similarity(needle: str, haystack: str) -> float:
+    needle = re.sub(r"\s+", " ", (needle or "").strip().lower())
+    haystack = (haystack or "").strip().lower()
+    if not needle or not haystack:
+        return 0.0
+    scores = []
+    for line in haystack.splitlines():
+        cleaned_line = re.sub(r"\s+", " ", line.strip())
+        if cleaned_line:
+            scores.append(SequenceMatcher(None, needle, cleaned_line).ratio())
+    return max(scores, default=SequenceMatcher(None, needle, re.sub(r"\s+", " ", haystack)).ratio())
+
+
 def _extract_json_object(text: str) -> dict[str, Any] | None:
     if not text:
         return None
@@ -308,13 +322,13 @@ def validate_and_flag(data: Dict[str, Any], raw_text: str) -> tuple[Dict[str, An
     normalized["number"] = number
 
     # If the model returned a name/company that doesn't appear in OCR at all, flag it.
-    ocr_lower = (raw_text or "").lower()
+    ocr_text = raw_text or ""
     for key in ("name", "company_name", "designation"):
         val = normalized.get(key)
         if not val:
             continue
         token = str(val).strip().lower()
-        if token and token not in ocr_lower:
+        if token and _best_similarity(token, ocr_text) < 0.68:
             low_confidence.append(key)
 
     # Deduplicate while preserving order.
