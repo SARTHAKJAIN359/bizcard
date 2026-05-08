@@ -24,6 +24,27 @@ let isScanning = false;
 let isSaving = false;
 let objectUrl = null;
 
+async function readJsonSafely(res) {
+  const contentType = res.headers.get("content-type") || "";
+  const isJson = contentType.includes("application/json");
+
+  if (!isJson) {
+    const text = await res.text();
+    const snippet = text.replace(/\s+/g, " ").slice(0, 180);
+    throw new Error(
+      `Server returned non-JSON (HTTP ${res.status}). ` +
+        `This usually means the app crashed or the route isn't reachable. ` +
+        `Response starts with: ${snippet}`
+    );
+  }
+
+  try {
+    return await res.json();
+  } catch (err) {
+    throw new Error(`Invalid JSON from server (HTTP ${res.status}).`);
+  }
+}
+
 function showToast(message) {
   toast.textContent = message;
   toast.classList.add("show");
@@ -184,8 +205,8 @@ async function scanCard(file) {
 
   try {
     const res = await fetch("/scan", { method: "POST", body: formData });
-    const payload = await res.json();
-    if (!res.ok) throw new Error(payload.error || "Failed to scan card.");
+    const payload = await readJsonSafely(res);
+    if (!res.ok) throw new Error(payload.error || `Failed to scan card (HTTP ${res.status}).`);
 
     clearReviewMarkers();
     setFormData(payload.data || {});
@@ -199,6 +220,11 @@ async function scanCard(file) {
     const meta = payload.meta || {};
     showWarnings(meta.warnings || []);
     markNeedsReview(meta.low_confidence_fields || []);
+
+    // Auto-scroll to the review form on mobile after scan completes.
+    setTimeout(() => {
+      form?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+    }, 50);
   } catch (error) {
     ocrText.textContent = `Error: ${error.message}`;
     scanStatus.textContent = "Scan failed.";
@@ -269,8 +295,8 @@ form.addEventListener("submit", async (e) => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ data }),
     });
-    const payload = await res.json();
-    if (!res.ok) throw new Error(payload.error || "Failed to save.");
+    const payload = await readJsonSafely(res);
+    if (!res.ok) throw new Error(payload.error || `Failed to save (HTTP ${res.status}).`);
 
     confirmedOnce = true;
     scanStatus.textContent = "Saved. You can scan another card.";
@@ -281,6 +307,11 @@ form.addEventListener("submit", async (e) => {
     setBadge("saved");
     // Keep preview and form so users can verify, but allow a new scan.
     scanBtn.disabled = !selectedFile;
+
+    // Auto-scroll to the saved summary after saving.
+    setTimeout(() => {
+      document.getElementById("lastCardFields")?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+    }, 50);
   } catch (error) {
     confirmBtn.disabled = false;
     errorMessage.textContent = error.message;
