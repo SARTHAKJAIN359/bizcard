@@ -69,6 +69,20 @@ Open `http://127.0.0.1:5000` in your browser.
 
 > This project deploys on Render as a Docker service. The Docker image installs Tesseract and sets `TESSERACT_CMD=/usr/bin/tesseract` automatically.
 
+## Replit Deployment
+
+This repository now includes Replit configuration for the free tier.
+
+1. Open the project on Replit and ensure the `.replit` and `replit.nix` files are present.
+2. In Replit secrets, set:
+   - `GROQ_API_KEY`
+   - optionally `GROQ_MODEL`
+   - optionally `TESSERACT_CMD` if you want to override the default path
+3. Replit will install Python dependencies and Tesseract via Nix.
+4. Run the repl. The app listens on `0.0.0.0:$PORT` automatically.
+
+> Use SQLite locally by leaving `DATABASE_URL` empty.
+
 ## Notes
 
 - Ensure Tesseract OCR is installed on Windows for local OCR.
