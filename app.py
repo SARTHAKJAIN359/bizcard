@@ -83,6 +83,8 @@ TESSERACT_LANG = os.getenv("TESSERACT_LANG", "eng").strip() or "eng"
 TESSERACT_TIMEOUT_SEC = int(os.getenv("TESSERACT_TIMEOUT_SEC", "6") or "6")
 OCR_MAX_VARIANTS = int(os.getenv("OCR_MAX_VARIANTS", "4") or "4")
 OCR_TIME_BUDGET_SEC = int(os.getenv("OCR_TIME_BUDGET_SEC", "10") or "10")
+OCR_ENABLE_HOMOMORPHIC_DFT = (os.getenv("OCR_ENABLE_HOMOMORPHIC_DFT", "1") or "1").strip().lower() in {"1", "true", "yes", "on"}
+OCR_ENABLE_ORIENTATION_VARIANTS = (os.getenv("OCR_ENABLE_ORIENTATION_VARIANTS", "1") or "1").strip().lower() in {"1", "true", "yes", "on"}
 APP_VERSION = os.getenv("RENDER_GIT_COMMIT") or os.getenv("GIT_COMMIT") or os.getenv("COMMIT_SHA") or ""
 
 
@@ -368,48 +370,43 @@ class BusinessCard(db.Model):
         }
 
 
-
-def preprocess_image(image_bytes: bytes) -> np.ndarray:
+def _homomorphic_filter_dft(gray: np.ndarray) -> np.ndarray:
     """
-    Preprocess business card images for OCR.
-
-    Returns a single image optimized for text recognition.
+    Homomorphic filtering using DFT (frequency domain) to reduce uneven illumination
+    and boost detail. Works well for glossy cards / gradients.
     """
-    np_array = np.frombuffer(image_bytes, np.uint8)
-    image = cv2.imdecode(np_array, cv2.IMREAD_COLOR)
-    if image is None:
-        raise ValueError("Invalid image data.")
+    if gray.ndim != 2:
+        return gray
 
-    max_width = 1400
-    height, width = image.shape[:2]
-    if width > max_width:
-        scale = max_width / float(width)
-        image = cv2.resize(image, (int(width * scale), int(height * scale)), interpolation=cv2.INTER_AREA)
+    img = gray.astype(np.float32)
+    img = np.clip(img, 1.0, 255.0)
 
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    log_img = np.log(img)
+    dft = cv2.dft(log_img, flags=cv2.DFT_COMPLEX_OUTPUT)
+    dft_shift = np.fft.fftshift(dft, axes=(0, 1))
 
-    # Boost local contrast for small fonts / low lighting.
-    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-    gray = clahe.apply(gray)
+    rows, cols = gray.shape[:2]
+    cy, cx = rows // 2, cols // 2
+    y = np.arange(rows, dtype=np.float32) - cy
+    x = np.arange(cols, dtype=np.float32) - cx
+    xx, yy = np.meshgrid(x, y)
+    d2 = (xx * xx) + (yy * yy)
 
-    # Denoise while preserving edges.
-    denoised = cv2.bilateralFilter(gray, d=7, sigmaColor=55, sigmaSpace=55)
+    # High-pass emphasis: attenuate low frequencies (illumination) and mildly boost high frequencies (detail).
+    d0 = max(min(rows, cols) / 10.0, 20.0)
+    gamma_l = 0.6
+    gamma_h = 1.4
+    c = 1.0
+    h = (gamma_h - gamma_l) * (1.0 - np.exp(-c * (d2 / (d0 * d0)))) + gamma_l
 
-    # Adaptive threshold to handle uneven lighting and glossy cards.
-    thresh = cv2.adaptiveThreshold(
-        denoised,
-        255,
-        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-        cv2.THRESH_BINARY,
-        31,
-        8,
-    )
+    filtered = dft_shift * h[:, :, None]
+    ishift = np.fft.ifftshift(filtered, axes=(0, 1))
+    img_back = cv2.idft(ishift, flags=cv2.DFT_REAL_OUTPUT | cv2.DFT_SCALE)
 
-    # Reduce pepper noise / small artifacts.
-    kernel = np.ones((2, 2), np.uint8)
-    cleaned = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel, iterations=1)
-
-    return cleaned
+    exp_img = np.exp(img_back)
+    exp_img = np.clip(exp_img, 0, None)
+    out = cv2.normalize(exp_img, None, 0, 255, cv2.NORM_MINMAX)
+    return out.astype(np.uint8)
 
 
 def _rotate_bound(gray_or_binary: np.ndarray, angle_deg: float) -> np.ndarray:
@@ -459,6 +456,36 @@ def _estimate_skew_angle(binary: np.ndarray) -> float:
     return float(angle)
 
 
+def _orientation_variants(gray: np.ndarray) -> list[np.ndarray]:
+    """
+    Generate cheap orientation variants to recover OCR when the camera app saves mirrored or rotated images.
+    Keeps the set intentionally small to protect latency.
+    """
+    variants = [gray]
+
+    # Portrait photos of cards often need a 90° rotation.
+    h, w = gray.shape[:2]
+    if h > int(w * 1.15):
+        variants.append(cv2.rotate(gray, cv2.ROTATE_90_CLOCKWISE))
+
+    # Mirrored selfies / front-cam captures.
+    variants.append(cv2.flip(gray, 1))  # horizontal
+
+    # Upside-down capture.
+    variants.append(cv2.rotate(gray, cv2.ROTATE_180))
+
+    # Dedup quickly (shape + small prefix bytes).
+    unique: list[np.ndarray] = []
+    seen: set[int] = set()
+    for v in variants:
+        key = (v.shape[0] << 16) ^ v.shape[1] ^ hash(v.tobytes()[:4096])
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(v)
+    return unique
+
+
 def _generate_ocr_variants(image_bytes: bytes) -> list[np.ndarray]:
     """
     Create multiple preprocessing variants to handle:
@@ -479,51 +506,63 @@ def _generate_ocr_variants(image_bytes: bytes) -> list[np.ndarray]:
         scale = max_width / float(w)
         image = cv2.resize(image, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
 
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    base_gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
-    # Illumination normalization: remove slow-varying background (glare/gradients).
-    background = cv2.GaussianBlur(gray, (0, 0), sigmaX=15)
-    norm = cv2.divide(gray, background, scale=255)
+    gray_inputs = [base_gray]
+    if OCR_ENABLE_ORIENTATION_VARIANTS:
+        gray_inputs = _orientation_variants(base_gray)
 
-    # Local contrast.
-    clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
-    norm = clahe.apply(norm)
+    variants: list[np.ndarray] = []
+    for gray in gray_inputs:
+        # Illumination normalization: remove slow-varying background (glare/gradients).
+        background = cv2.GaussianBlur(gray, (0, 0), sigmaX=15)
+        norm = cv2.divide(gray, background, scale=255)
 
-    # Denoise for small fonts.
-    denoised = cv2.fastNlMeansDenoising(norm, h=18, templateWindowSize=7, searchWindowSize=21)
+        # Local contrast (small fonts, low lighting).
+        clahe = cv2.createCLAHE(clipLimit=2.7, tileGridSize=(8, 8))
+        norm = clahe.apply(norm)
 
-    # Unsharp mask for crisper edges (helps thin fonts).
-    blur = cv2.GaussianBlur(denoised, (0, 0), sigmaX=1.2)
-    sharp = cv2.addWeighted(denoised, 1.65, blur, -0.65, 0)
+        # Frequency-domain illumination correction + detail emphasis (DFT).
+        if OCR_ENABLE_HOMOMORPHIC_DFT:
+            norm = _homomorphic_filter_dft(norm)
 
-    # Threshold variants.
-    _, otsu = cv2.threshold(sharp, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    adapt_g = cv2.adaptiveThreshold(sharp, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 31, 9)
-    adapt_m = cv2.adaptiveThreshold(sharp, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY, 31, 9)
+        # Denoise for small fonts.
+        denoised = cv2.fastNlMeansDenoising(norm, h=18, templateWindowSize=7, searchWindowSize=21)
 
-    # Deskew based on a stable binary mask.
-    skew_angle = _estimate_skew_angle(otsu)
-    if skew_angle != 0.0:
-        gray_deskew = _rotate_bound(sharp, skew_angle)
-        _, otsu_deskew = cv2.threshold(gray_deskew, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-        adapt_g_deskew = cv2.adaptiveThreshold(
-            gray_deskew, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 31, 9
+        # Unsharp mask for crisper edges (helps thin fonts).
+        blur = cv2.GaussianBlur(denoised, (0, 0), sigmaX=1.2)
+        sharp = cv2.addWeighted(denoised, 1.65, blur, -0.65, 0)
+
+        # Threshold variants.
+        _, otsu = cv2.threshold(sharp, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        adapt_g = cv2.adaptiveThreshold(sharp, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 31, 9)
+        adapt_m = cv2.adaptiveThreshold(sharp, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY, 31, 9)
+
+        # Deskew based on a stable binary mask.
+        skew_angle = _estimate_skew_angle(otsu)
+        if skew_angle != 0.0:
+            gray_deskew = _rotate_bound(sharp, skew_angle)
+            _, otsu_deskew = cv2.threshold(gray_deskew, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            adapt_g_deskew = cv2.adaptiveThreshold(
+                gray_deskew, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 31, 9
+            )
+        else:
+            gray_deskew = sharp
+            otsu_deskew = otsu
+            adapt_g_deskew = adapt_g
+
+        # Morphology to reduce speckle and improve character connectivity.
+        open_kernel = np.ones((2, 2), np.uint8)
+        close_kernel = np.ones((2, 2), np.uint8)
+        variants.extend(
+            [
+                gray_deskew,
+                cv2.morphologyEx(otsu_deskew, cv2.MORPH_OPEN, open_kernel, iterations=1),
+                cv2.morphologyEx(adapt_g_deskew, cv2.MORPH_OPEN, open_kernel, iterations=1),
+                cv2.morphologyEx(adapt_m, cv2.MORPH_OPEN, open_kernel, iterations=1),
+                cv2.morphologyEx(otsu_deskew, cv2.MORPH_CLOSE, close_kernel, iterations=1),
+            ]
         )
-    else:
-        gray_deskew = sharp
-        otsu_deskew = otsu
-        adapt_g_deskew = adapt_g
-
-    # Morphology to reduce speckle and improve character connectivity.
-    open_kernel = np.ones((2, 2), np.uint8)
-    close_kernel = np.ones((2, 2), np.uint8)
-    variants = [
-        gray_deskew,
-        cv2.morphologyEx(otsu_deskew, cv2.MORPH_OPEN, open_kernel, iterations=1),
-        cv2.morphologyEx(adapt_g_deskew, cv2.MORPH_OPEN, open_kernel, iterations=1),
-        cv2.morphologyEx(adapt_m, cv2.MORPH_OPEN, open_kernel, iterations=1),
-        cv2.morphologyEx(otsu_deskew, cv2.MORPH_CLOSE, close_kernel, iterations=1),
-    ]
 
     # Inverted variants help when the card has dark background and light text.
     variants.extend([255 - v for v in variants if v.ndim == 2])
@@ -678,27 +717,31 @@ def get_structured_data_with_groq(raw_text: str) -> Dict[str, Any]:
     if not GROQ_API_KEY:
         return _heuristic_structured_data(raw_text)
 
-    prompt = (
-        "You are an information extraction assistant for business cards.\n"
-        "Extract data and return ONLY valid JSON.\n"
-        "Return an object with exactly these keys:\n"
+    system_prompt = (
+        "You are BizScannerExtract, a strict business-card information extractor.\n"
+        "Output MUST be a single JSON object (no markdown, no extra text) with EXACTLY these keys:\n"
         "name, number, address, website, company_name, designation.\n"
         "Rules:\n"
-        "1) Use null for missing values.\n"
-        "2) If multiple phone numbers exist, combine into one string separated by comma.\n"
-        "3) Normalize website to a plain domain/URL without trailing punctuation.\n"
-        "4) Normalize phone numbers to readable format; keep country code if present.\n"
-        "5) Do not add extra keys.\n"
-        "6) Return JSON only, no markdown.\n\n"
-        f"Business card OCR text:\n{raw_text}"
+        "- Use null when unknown or not present in the text. Never guess.\n"
+        "- Only extract what is supported by the OCR text.\n"
+        "- If multiple phone numbers exist: join into one string separated by comma.\n"
+        "- Website: output a domain/URL without trailing punctuation/spaces; fix obvious OCR typos like 'htrp'->'http'.\n"
+        "- Phone: keep + and digits; remove obvious junk; keep readable separators.\n"
+        "- Address: keep as a single line string (commas allowed).\n"
+        "- Do not invent companies/titles; if unclear, set null.\n"
+    )
+
+    user_prompt = (
+        "Extract the fields from this OCR text. Remember: JSON only, exactly the required keys.\n\n"
+        f"OCR TEXT:\n{raw_text}"
     )
 
     payload = {
         "model": GROQ_MODEL,
         "temperature": 0.1,
         "messages": [
-            {"role": "system", "content": "You extract business card details to strict JSON."},
-            {"role": "user", "content": prompt},
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
         ],
         "response_format": {"type": "json_object"},
     }
